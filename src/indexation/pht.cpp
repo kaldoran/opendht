@@ -275,7 +275,6 @@ void Pht::insert(Key k, Value v, DoneCallbackSimple done_cb) {
     auto vals = std::make_shared<std::vector<std::shared_ptr<Value>>>();
     auto final_prefix = std::make_shared<Prefix>();
 
-
     lookupStep(kp, lo, hi, vals,
         [=](std::vector<std::shared_ptr<Value>>&, Prefix p) {
             *final_prefix = Prefix(p);
@@ -294,13 +293,15 @@ void Pht::insert(Key k, Value v, DoneCallbackSimple done_cb) {
                 RealInsertCallback real_insert = [=]( std::shared_ptr<Prefix> p, IndexEntry entry ) {
                     updateCanary(*p);
                     checkPhtUpdate(*p, entry);
+                    
                     dht_->put(p->hash(), std::move(entry), done_cb);
                 };
 
-                std::cerr << "Insert prefix" << p.toString() << std::endl;
-
-                if ( vals->size() <= MAX_NODE_ENTRY_COUNT )
+                std::cerr << "Sizw " <<  vals->size() << std::endl;
+                std::cerr << "SIZE Prefix : " << final_prefix->size_ << std::endl;
+                if ( vals->size() < MAX_NODE_ENTRY_COUNT ) {
                     getRealPrefix( final_prefix, std::move(entry), real_insert);
+                }
                 else {
                     *final_prefix = kp.getPrefix(final_prefix->size_+1);
                     real_insert( final_prefix, std::move(entry) );

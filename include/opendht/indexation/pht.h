@@ -271,25 +271,27 @@ private:
      * @param p      Prefix that need to be kept update
      * @paran entry  The entry to put back
      */
-    void checkPhtUpdate(const Prefix &p, const IndexEntry &entry) {
+    void checkPhtUpdate(Prefix p, IndexEntry entry) {
 
-        /* Don't try to go further than the end of the prefix */
-        if ( p.size_ >= p.content_.size() * 8 ) return;
+        Prefix full = entry.prefix;
+        if ( p.size_ >= full.size_ ) return;
 
-        auto next_prefix = p.getPrefix( p.size_ + 1);
+        auto next_prefix = full.getPrefix( p.size_ + 1 ); 
 
         dht_->listen(next_prefix.hash(),
             [=](const std::shared_ptr<dht::Value> &value) {
                 if (value->user_type == canary_) {
-                    dht_->put(next_prefix.hash(), std::move(entry));
-                    checkPhtUpdate(next_prefix, entry);
 
-                    std::cerr << "New canary found !" << std::endl;
+                    dht_->put(next_prefix.hash(), entry);
+
+                    checkPhtUpdate(next_prefix, entry);
+                    std::cerr << "New canary found ! " << next_prefix.toString() << std::endl;
+
                     /* Cancel listen since we found where we need to update*/
                     return false;
                 }
 
-                std::cerr << "Next value since no canary_ found !" << std::endl;
+                std::cerr << "Next value since no canary_ found !" << *value << std::endl;
                 return true;
             },
             [=](const dht::Value& v) {
@@ -308,8 +310,13 @@ private:
      */
     void getRealPrefix(std::shared_ptr<Prefix> p, IndexEntry entry, RealInsertCallback end_cb ) {
 
-        auto total = std::make_shared<int>(0); /* Will contains the total number of data on 3 nodes */
-        auto ended = std::make_shared<int>(0); /* Just indicate how many have end */
+        if ( p->size_ == 0 ) {
+            end_cb(p, std::move(entry));
+            return;
+        }
+
+        auto total = std::make_shared<unsigned int>(0); /* Will contains the total number of data on 3 nodes */
+        auto ended = std::make_shared<unsigned int>(0); /* Just indicate how many have end */
         
         auto parent = std::make_shared<Prefix>(p->getPrefix(-1));
         auto sibling = std::make_shared<Prefix>(p->getSibling());
@@ -319,11 +326,11 @@ private:
         };
 
         /* Lambda will count total number of data node */
-        auto count = [=]( const std::shared_ptr<dht::Value> val ) {
-            if ( val->user_type != canary_)
+        auto count = [=]( const std::shared_ptr<dht::Value> value ) {
+            if ( value->user_type != canary_)
                 (*total)++;
 
-            std::cerr << "Total data " << *total << std::endl;
+            std::cerr << "Total data " << *total << " Data " << *value << std::endl;
             return true;
         };
 
@@ -336,7 +343,7 @@ private:
                 else
                     end_cb(p, std::move(entry));
 
-                std::cerr << "Total" << *total << std::endl;
+                std::cerr << "Total " << *total << " Out of "  << MAX_NODE_ENTRY_COUNT  << " PUT " << p->toString() << std::endl;
             }
         };
 

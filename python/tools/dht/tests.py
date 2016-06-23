@@ -288,9 +288,12 @@ class PhtTest(FeatureTest):
                        'node'+ ('s' if pht.MAX_NODE_ENTRY_COUNT > 1 else ''),
                        'per leaf bucket.')
         keys = [{
-            [_ for _ in keyspec.keys()][0] :
-            ''.join(random.SystemRandom().choice(string.hexdigits)
-                for _ in range(NUM_DIG)).encode()
+        # FIX : Uncomment next lines
+        #    [_ for _ in keyspec.keys()][0] :
+        #    ''.join(random.SystemRandom().choice(string.hexdigits)
+        #        for _ in range(NUM_DIG)).encode()
+            'foo' :
+            '000000000'.encode()
             } for n in range(self._num_keys)]
         all_entries = {}
 
@@ -302,6 +305,9 @@ class PhtTest(FeatureTest):
                 if self._timer:
                     DhtNetwork.log('This insert step took : ', time_taken, 'second')
                 FeatureTest.lock.wait()
+
+        # FIX : remove next line
+        time.sleep(30)
 
         # Recover entries now that the trie is complete.
         for key in keys:

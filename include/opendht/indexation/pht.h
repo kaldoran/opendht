@@ -151,7 +151,7 @@ public:
     /* This is the maximum number of entries per node. This parameter is
      * critical and influences the traffic a lot during a lookup operation.
      */
-    static constexpr const size_t MAX_NODE_ENTRY_COUNT {16};
+    static constexpr const size_t MAX_NODE_ENTRY_COUNT {2};
 
     /* A key for a an index entry */
     using Key = std::map<std::string, Blob>;
@@ -200,9 +200,13 @@ public:
     /**
      * Adds an entry into the index.
      */
-    void insert(Key k, Value v, DoneCallbackSimple cb = {});
+    void insert(Key k, Value v, DoneCallbackSimple cb = {}, std::string from = "NO where", time_point created = time_point::max());
 
 private:
+
+    using LookupCallbackWrapper = std::function<void(std::vector<std::shared_ptr<IndexEntry>>& values, Prefix p)>;
+
+
     class Cache {
     public:
         /**
@@ -221,7 +225,7 @@ private:
 
     private:
         static constexpr const size_t MAX_ELEMENT {1024};
-        static constexpr const std::chrono::minutes NODE_EXPIRE_TIME {5};
+        static constexpr const std::chrono::minutes NODE_EXPIRE_TIME {10};
 
         struct Node {
             time_point last_reply;           /* Made the assocation between leaves and leaves multimap */
@@ -274,6 +278,7 @@ private:
     void checkPhtUpdate(Prefix p, IndexEntry entry) {
 
         Prefix full = entry.prefix;
+        std::cerr << "SIZE : " << p.size_ << " - FUll" << full.size_<< std::endl;
         if ( p.size_ >= full.size_ ) return;
 
         auto next_prefix = full.getPrefix( p.size_ + 1 ); 
@@ -281,17 +286,21 @@ private:
         dht_->listen(next_prefix.hash(),
             [=](const std::shared_ptr<dht::Value> &value) {
                 if (value->user_type == canary_) {
+                    // updateCanary(next_prefix);
+                    // checkPhtUpdate(next_prefix, entry);          
+                    // std::cerr << " LISTEN PUT HERE " << next_prefix.toString() << std::endl;                           
+                    // dht_->put(next_prefix.hash(), std::move(entry));
+                    // checkPhtUpdate(next_prefix, entry);
+                    // dht_->put(next_prefix.hash(), entry);
+                    // std::cerr << "New canary found ! " << next_prefix.toString() << std::endl;
+                    cache_.insert(next_prefix);
+                    insert({{"foo", full}}, entry.value, nullptr, "Listen");
 
-                    dht_->put(next_prefix.hash(), entry);
-
-                    checkPhtUpdate(next_prefix, entry);
-                    std::cerr << "New canary found ! " << next_prefix.toString() << std::endl;
 
                     /* Cancel listen since we found where we need to update*/
                     return false;
                 }
 
-                std::cerr << "Next value since no canary_ found !" << *value << std::endl;
                 return true;
             },
             [=](const dht::Value& v) {

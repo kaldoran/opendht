@@ -109,7 +109,7 @@ const ValueType IndexEntry::TYPE = ValueType::USER_DATA;
 constexpr std::chrono::minutes Pht::Cache::NODE_EXPIRE_TIME;
 
 void Pht::lookupStep(Prefix p, std::shared_ptr<int> lo, std::shared_ptr<int> hi,
-        std::shared_ptr<std::vector<std::shared_ptr<Value>>> vals,
+        std::shared_ptr<std::vector<std::shared_ptr<IndexEntry>>> vals,
         LookupCallback cb, DoneCallbackSimple done_cb,
         std::shared_ptr<unsigned> max_common_prefix_len, int start, bool all_values)
 {
@@ -122,6 +122,7 @@ void Pht::lookupStep(Prefix p, std::shared_ptr<int> lo, std::shared_ptr<int> hi,
     auto mid = (start >= 0) ? (unsigned) start : (*lo + *hi)/2;
     auto first_res = std::make_shared<node_lookup_result>();
     auto second_res = std::make_shared<node_lookup_result>();
+
     auto on_done = [=](bool ok) {
         bool is_leaf = first_res->is_pht and not second_res->is_pht;
         if (not ok) {
@@ -161,17 +162,21 @@ void Pht::lookupStep(Prefix p, std::shared_ptr<int> lo, std::shared_ptr<int> hi,
             return v.user_type.compare(0, name_.size(), name_) == 0;
         };
 
-        auto on_get = [=](const std::shared_ptr<dht::Value>& value, std::shared_ptr<node_lookup_result> res) {
-            if (value->user_type == canary_)
+        auto on_get = [=](const std::shared_ptr<dht::Value>& value, std::shared_ptr<node_lookup_result> res, std::string s, Prefix pr) {
+            if (value->user_type == canary_) {
+                std::cerr << s << "CANARY HERE "  << pr.toString() << std::endl;
                 res->is_pht = true;
+            }
             else {
                 IndexEntry entry;
                 entry.unpackValue(*value);
 
                 auto add_value = [&](bool better = true) {
-                    vals->emplace_back(std::make_shared<Value>(entry.value));
+                    vals->emplace_back(std::make_shared<Value>(entry));
                     if (better and max_common_prefix_len)
                         *max_common_prefix_len = Prefix::commonBits(p, vals->front()->first);
+
+                    std::cerr << s << " INSERT THIS " << entry.value.first << " Prefix "  << pr.toString() << std::endl;
                 };
                 if (max_common_prefix_len) {
                     if (vals->empty()) {
@@ -192,8 +197,9 @@ void Pht::lookupStep(Prefix p, std::shared_ptr<int> lo, std::shared_ptr<int> hi,
             return true;
         };
 
+
         dht_->get(p.getPrefix(mid).hash(),
-                std::bind(on_get, std::placeholders::_1, first_res),
+                std::bind(on_get, std::placeholders::_1, first_res, "First", p.getPrefix(mid)),
                 [=](bool ok) {
                     if (not ok) {
                         // DHT failed
@@ -208,7 +214,7 @@ void Pht::lookupStep(Prefix p, std::shared_ptr<int> lo, std::shared_ptr<int> hi,
                             lookupStep(p, lo, hi, vals, cb, done_cb, max_common_prefix_len, -1, all_values);
                         } else {
                             first_res->done = true;
-                            if (second_res->done)
+                            if (second_res->done or mid >= p.size_ )
                                 on_done(true);
                         }
                     }
@@ -216,7 +222,7 @@ void Pht::lookupStep(Prefix p, std::shared_ptr<int> lo, std::shared_ptr<int> hi,
 
         if (mid < p.size_)
            dht_->get(p.getPrefix(mid+1).hash(),
-                    std::bind(on_get, std::placeholders::_1, second_res),
+                    std::bind(on_get, std::placeholders::_1, second_res, "Second", p.getPrefix(mid+1)),
                     [=](bool ok) {
                         if (not ok) {
                             // DHT failed
@@ -243,14 +249,24 @@ void Pht::lookup(Key k, Pht::LookupCallback cb, DoneCallbackSimple done_cb, bool
     auto hi = std::make_shared<int>(prefix.size_);
     std::shared_ptr<unsigned> max_common_prefix_len = not exact_match ? std::make_shared<unsigned>(0) : nullptr;
 
-    lookupStep(prefix, lo, hi, values, cb, done_cb, max_common_prefix_len, cache_.lookup(prefix));
+    std::cerr << "Lookup here : "  << prefix.toString() << " Cache : " << cache_.lookup(prefix) << std::endl;
+
+    lookupStep(prefix, lo, hi, values, 
+        [=](std::vector<std::shared_ptr<IndexEntry>>& entries, Prefix p) {
+            std::vector<std::shared_ptr<Value>> vals;
+            std::transform(entries.begin(), entries.end(), vals.begin(),
+                [](const std::shared_ptr<IndexEntry>& ie) {
+                    return ie.value;
+            });
+            cb(vals, p);
+        }, done_cb, max_common_prefix_len, cache_.lookup(prefix));
 }
 
 void Pht::updateCanary(Prefix p) {
     // TODO: change this... copy value
     dht::Value canary_value;
     canary_value.user_type = canary_;
-
+    std::cerr << "Canary here " << p.toString() << std::endl;
     dht_->put(p.hash(), std::move(canary_value),
         [=](bool){
             static std::bernoulli_distribution d(0.5);
@@ -267,16 +283,18 @@ void Pht::updateCanary(Prefix p) {
     }
 }
 
-void Pht::insert(Key k, Value v, DoneCallbackSimple done_cb) {
+void Pht::insert(Key k, Value v, DoneCallbackSimple done_cb, std::string from, time_point created) {
+    if (created + ValueType::USER_DATA.expiration < clock::now()) return;
     Prefix kp = linearize(k);
 
+    std::cerr << " Prefix total " << kp.toString() << std::endl;
     auto lo = std::make_shared<int>(0);
     auto hi = std::make_shared<int>(kp.size_);
-    auto vals = std::make_shared<std::vector<std::shared_ptr<Value>>>();
+    auto vals = std::make_shared<std::vector<std::shared_ptr<IndexEntry>>>();
     auto final_prefix = std::make_shared<Prefix>();
 
     lookupStep(kp, lo, hi, vals,
-        [=](std::vector<std::shared_ptr<Value>>&, Prefix p) {
+        [=](std::vector<std::shared_ptr<IndexEntry>>&, Prefix p) {
             *final_prefix = Prefix(p);
         },
         [=](bool ok){
@@ -290,22 +308,26 @@ void Pht::insert(Key k, Value v, DoneCallbackSimple done_cb) {
                 entry.prefix = kp.content_;
                 entry.name = name_;
 
-                RealInsertCallback real_insert = [=]( std::shared_ptr<Prefix> p, IndexEntry entry ) {
+                RealInsertCallback real_insert = [=]( std::shared_ptr<Prefix> p, IndexEntry entry) {
                     updateCanary(*p);
                     checkPhtUpdate(*p, entry);
-                    
                     dht_->put(p->hash(), std::move(entry), done_cb);
                 };
 
-                std::cerr << "Sizw " <<  vals->size() << std::endl;
-                std::cerr << "SIZE Prefix : " << final_prefix->size_ << std::endl;
+                std::cerr << "Vals size " << vals->size() << std::endl;
+
                 if ( vals->size() < MAX_NODE_ENTRY_COUNT ) {
                     getRealPrefix( final_prefix, std::move(entry), real_insert);
                 }
                 else {
-                    *final_prefix = kp.getPrefix(final_prefix->size_+1);
-                    real_insert( final_prefix, std::move(entry) );
+                    /* Need to split but we can't since the key is not long enouth */
+                    if ( final_prefix->size_ < kp.size_ ) 
+                        *final_prefix = kp.getPrefix(final_prefix->size_+1);
+
+                    real_insert( final_prefix, std::move(entry));
                 }
+
+
             }
         }, nullptr, cache_.lookup(kp), true
     );

@@ -52,16 +52,13 @@ struct Prefix {
      * @param pos : Pos of the needed bit
      * @return : true if the bit is at 1
      *           false otherwise
+     * @throw out_of_range Throw out of range if the bit at 'pos' does not exist
      */
     bool isActiveBit(size_t pos) const {
-        if ( pos > size_ )
-            throw std::out_of_range("Can't detect active bit at pos, pos larger than prefix size");
+        if ( pos >= size_ )
+            throw std::out_of_range("Can't detect active bit at pos, pos larger than prefix size or empty prefix");
 
-        auto vector_pos = pos / 8;
-        if ( pos and pos % 8 == 0 )
-            --vector_pos;
-
-        return ((this->content_[vector_pos] >> (7 - (pos % 8)) ) & 1) == 1;
+        return ((this->content_[pos / 8] >> (7 - (pos % 8)) ) & 1) == 1;
     }
 
     Prefix getFullSize() { return Prefix(*this, content_.size()*8); }
@@ -131,7 +128,6 @@ struct Prefix {
             throw std::out_of_range("bit larger than prefix size.");
 
         Prefix copy = *this;
-        
         size_t offset_bit = (8 - bit) % 8;
         copy.content_[bit / 8] ^= (1 << offset_bit);
 
@@ -140,9 +136,31 @@ struct Prefix {
 
     size_t size_ {0};
     Blob content_ {};
+
 };
 
 using Value = std::pair<InfoHash, dht::Value::Id>;
+
+struct IndexEntry : public dht::Value::Serializable<IndexEntry> {
+    static const ValueType TYPE;
+
+    virtual void unpackValue(const dht::Value& v) {
+        Serializable<IndexEntry>::unpackValue(v);
+        name = v.user_type;
+    }
+
+    virtual dht::Value packValue() const {
+        auto pack = Serializable<IndexEntry>::packValue();
+        pack.user_type = name;
+        return pack;
+    }
+
+    Blob prefix;
+    Value value;
+    std::string name;
+    MSGPACK_DEFINE_MAP(prefix, value);
+};
+
 
 class Pht {
     static constexpr const char* INVALID_KEY = "Key does not match the PHT key spec.";
@@ -154,7 +172,7 @@ public:
     /* This is the maximum number of entries per node. This parameter is
      * critical and influences the traffic a lot during a lookup operation.
      */
-    static constexpr const size_t MAX_NODE_ENTRY_COUNT {16};
+    static constexpr const size_t MAX_NODE_ENTRY_COUNT {2}; // FIX : 16
 
     /* A key for a an index entry */
     using Key = std::map<std::string, Blob>;
@@ -162,7 +180,10 @@ public:
      * serialization order of fields. */
     using KeySpec = std::map<std::string, size_t>;
 
+    using RealInsertCallback = std::function<void(std::shared_ptr<Prefix> p, IndexEntry entry )>;
     using LookupCallback = std::function<void(std::vector<std::shared_ptr<Value>>& values, Prefix p)>;
+    using LookupCallbackWrapper = std::function<void(std::vector<std::shared_ptr<IndexEntry>>& values, Prefix p)>;
+
     typedef void (*LookupCallbackRaw)(std::vector<std::shared_ptr<Value>>* values, Prefix* p, void *user_data);
     static LookupCallback
     bindLookupCb(LookupCallbackRaw raw_cb, void* user_data) {
@@ -218,11 +239,12 @@ private:
          * @param p : Prefix that we are looking for
          * @return  : The size of the longest prefix known in the cache between 0 and p.size_
          */
+
         int lookup(const Prefix& p);
 
     private:
         static constexpr const size_t MAX_ELEMENT {1024};
-        static constexpr const std::chrono::minutes NODE_EXPIRE_TIME {5};
+        static constexpr const std::chrono::minutes NODE_EXPIRE_TIME {10};
 
         struct Node {
             time_point last_reply;           /* Made the assocation between leaves and leaves multimap */
@@ -246,7 +268,7 @@ private:
      * asynchronously.
      */
     void lookupStep(Prefix k, std::shared_ptr<int> lo, std::shared_ptr<int> hi,
-            std::shared_ptr<std::vector<std::shared_ptr<Value>>> vals, LookupCallback cb,
+            std::shared_ptr<std::vector<std::shared_ptr<IndexEntry>>> vals, LookupCallbackWrapper cb,
             DoneCallbackSimple done_cb, std::shared_ptr<unsigned> max_common_prefix_len,
             int start = -1, bool all_values = false);
 
@@ -273,8 +295,133 @@ private:
     };
 
     /**
+     * Looking where to put the data cause if there i free space on the node above then this node will became the real leave.
+     *
+     * @param p       Share_ptr on the Prefix to check
+     * @param entry   The entry to put at the prefix p
+     * @param end_cb  Callback to use at the end of counting
+     */
+    void getRealPrefix(std::shared_ptr<Prefix> p, IndexEntry entry, RealInsertCallback end_cb ) {
+
+        if ( p->size_ == 0 ) {
+            end_cb(p, std::move(entry));
+            return;
+        }
+
+        auto total = std::make_shared<unsigned int>(0); /* Will contains the total number of data on 3 nodes */
+        auto ended = std::make_shared<unsigned int>(0); /* Just indicate how many have end */
+
+        auto parent = std::make_shared<Prefix>(p->getPrefix(-1));
+        auto sibling = std::make_shared<Prefix>(p->getSibling());
+
+        auto pht_filter = [&](const dht::Value& v) {
+            return v.user_type.compare(0, name_.size(), name_) == 0;
+        };
+
+        /* Lambda will count total number of data node */
+        auto count = [=]( const std::shared_ptr<dht::Value> value ) {
+            if ( value->user_type != canary_)
+                (*total)++;
+
+            std::cerr << "Total data " << *total << " Data " << *value << std::endl;
+            return true;
+        };
+
+        auto on_done = [=] ( bool ) {
+            (*ended)++;
+            /* Only the last one do the CallBack*/
+            if  ( *ended == 3 ) {
+                if ( *total < MAX_NODE_ENTRY_COUNT )
+                    end_cb(parent, std::move(entry));
+                else
+                    end_cb(p, std::move(entry));
+
+                std::cerr << "Total " << *total << " Out of "  << MAX_NODE_ENTRY_COUNT  << " PUT " << p->toString() << std::endl;
+            }
+        };
+
+        dht_->get(parent->hash(),
+            count,
+            on_done,
+            pht_filter
+        );
+
+        dht_->get(p->hash(),
+            count,
+            on_done,
+            pht_filter
+        );
+
+        dht_->get(sibling->hash(),
+            count,
+            on_done,
+            pht_filter
+        );
+    }
+
+    /**
      * Tells if the key is valid according to the key spec.
      */
+    void checkPhtUpdate(Key k, Prefix p, IndexEntry entry) {
+
+        Prefix full = entry.prefix;
+        if ( p.size_ >= full.size_ ) return;
+
+        auto next_prefix = full.getPrefix( p.size_ + 1 ); 
+
+        dht_->listen(next_prefix.hash(),
+            [=](const std::shared_ptr<dht::Value> &value) {
+                if (value->user_type == canary_) {
+                    // updateCanary(next_prefix);
+                    // checkPhtUpdate(next_prefix, entry);
+                    // std::cerr << " LISTEN PUT HERE " << next_prefix.toString() << std::endl;
+                    // dht_->put(next_prefix.hash(), std::move(entry));
+                    // checkPhtUpdate(next_prefix, entry);
+                    // dht_->put(next_prefix.hash(), entry);
+                    // std::cerr << "New canary found ! " << next_prefix.toString() << std::endl;
+
+                    insert(k, entry.value, nullptr);
+
+                    /* Cancel listen since we found where we need to update*/
+                    return false;
+                }
+
+                return true;
+            },
+            [=](const dht::Value& v) {
+                /* Filter value v thats start with the same name as ours */
+                return v.user_type.compare(0, name_.size(), name_) == 0;
+            }
+        );
+    }
+
+    size_t foundSplitLocation(Prefix compared, std::shared_ptr<std::vector<std::shared_ptr<IndexEntry>>> vals) {
+        std::cerr << "Found split loc" << std::endl;
+        for ( auto i = 0; i < compared.size_; i++ ) 
+            for ( auto const& v : *vals)
+                if ( Prefix(v->prefix).isActiveBit(i) != compared.isActiveBit(i) )
+                    return i;
+
+        return compared.size_;
+    }
+
+    void split(Prefix insert, std::shared_ptr<std::vector<std::shared_ptr<IndexEntry>>> vals, IndexEntry entry, RealInsertCallback end_cb ) {
+        std::cerr << "SPLIT" << std::endl;
+        auto full = Prefix(entry.prefix);
+
+        auto loc = foundSplitLocation(full, vals);
+        auto prefix_to_insert = std::make_shared<Prefix>(full.getPrefix(loc + (loc != full.size_ )));
+
+        for (; loc >= insert.size_; --loc)
+            updateCanary(full.getPrefix(loc));
+
+        end_cb(prefix_to_insert, entry);
+    }
+
+    /**
+     * Tells if the key is valid according to the key spec.
+     */
+
     bool validKey(const Key& k) const {
         return k.size() == keySpec_.size() and
             std::equal(k.begin(), k.end(), keySpec_.begin(),

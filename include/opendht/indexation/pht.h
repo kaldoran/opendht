@@ -124,7 +124,7 @@ struct Prefix {
      * @throw out_of_range Throw out of range if bit does not exist
      */
     Prefix swapBit(size_t bit) const {
-	if ( bit >= copy.size_ ) 
+	if ( bit >= size_ )
 	    throw std::out_of_range("bit larger than prefix size.");
 
         Prefix copy = *this;
@@ -137,9 +137,31 @@ struct Prefix {
 
     size_t size_ {0};
     Blob content_ {};
+
 };
 
 using Value = std::pair<InfoHash, dht::Value::Id>;
+
+struct IndexEntry : public dht::Value::Serializable<IndexEntry> {
+    static const ValueType TYPE;
+
+    virtual void unpackValue(const dht::Value& v) {
+        Serializable<IndexEntry>::unpackValue(v);
+        name = v.user_type;
+    }
+
+    virtual dht::Value packValue() const {
+        auto pack = Serializable<IndexEntry>::packValue();
+        pack.user_type = name;
+        return pack;
+    }
+
+    Blob prefix;
+    Value value;
+    std::string name;
+    MSGPACK_DEFINE_MAP(prefix, value);
+};
+
 
 class Pht {
     static constexpr const char* INVALID_KEY = "Key does not match the PHT key spec.";
@@ -161,6 +183,7 @@ public:
 
     using RealInsertCallback = std::function<void(std::shared_ptr<Prefix> p, IndexEntry entry )>;
     using LookupCallback = std::function<void(std::vector<std::shared_ptr<Value>>& values, Prefix p)>;
+    using LookupCallbackWrapper = std::function<void(std::vector<std::shared_ptr<IndexEntry>>& values, Prefix p)>;
 
     typedef void (*LookupCallbackRaw)(std::vector<std::shared_ptr<Value>>* values, Prefix* p, void *user_data);
     static LookupCallback
@@ -204,9 +227,6 @@ public:
 
 private:
 
-    using LookupCallbackWrapper = std::function<void(std::vector<std::shared_ptr<IndexEntry>>& values, Prefix p)>;
-
-
     class Cache {
     public:
         /**
@@ -249,7 +269,7 @@ private:
      * asynchronously.
      */
     void lookupStep(Prefix k, std::shared_ptr<int> lo, std::shared_ptr<int> hi,
-            std::shared_ptr<std::vector<std::shared_ptr<Value>>> vals, LookupCallback cb,
+            std::shared_ptr<std::vector<std::shared_ptr<IndexEntry>>> vals, LookupCallbackWrapper cb,
             DoneCallbackSimple done_cb, std::shared_ptr<unsigned> max_common_prefix_len,
             int start = -1, bool all_values = false);
 
@@ -275,7 +295,7 @@ private:
      * @param p      Prefix that need to be kept update
      * @paran entry  The entry to put back
      */
-    void checkPhtUpdate(Prefix p, IndexEntry entry) {
+    void checkPhtUpdate(Key k, Prefix p, IndexEntry entry) {
 
         Prefix full = entry.prefix;
         std::cerr << "SIZE : " << p.size_ << " - FUll" << full.size_<< std::endl;
@@ -293,8 +313,8 @@ private:
                     // checkPhtUpdate(next_prefix, entry);
                     // dht_->put(next_prefix.hash(), entry);
                     // std::cerr << "New canary found ! " << next_prefix.toString() << std::endl;
-                    cache_.insert(next_prefix);
-                    insert({{"foo", full}}, entry.value, nullptr, "Listen");
+
+                    insert(k, entry.value, nullptr, "Listen");
 
 
                     /* Cancel listen since we found where we need to update*/

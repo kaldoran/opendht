@@ -54,7 +54,14 @@ struct Prefix {
      *           false otherwise
      */
     bool isActiveBit(size_t pos) const {
-        return ((this->content_[pos / 8] >> (7 - (pos % 8)) ) & 1) == 1;
+        if ( pos > size_ )
+            throw std::out_of_range("Can't detect active bit at pos, pos larger than prefix size");
+
+        auto vector_pos = pos / 8;
+        if ( pos and pos % 8 == 0 )
+            --vector_pos;
+
+        return ((this->content_[vector_pos] >> (7 - (pos % 8)) ) & 1) == 1;
     }
 
     Prefix getFullSize() { return Prefix(*this, content_.size()*8); }

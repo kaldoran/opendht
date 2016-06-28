@@ -111,7 +111,7 @@ void Pht::lookupStep(Prefix p, std::shared_ptr<int> lo, std::shared_ptr<int> hi,
         }
         else if (is_leaf or *lo > *hi) {
             // leaf node
-            auto to_insert = p.getPrefix(mid);
+            Prefix to_insert = p.getPrefix(mid);
             cache_.insert(to_insert);
 
             if (cb) {
@@ -227,10 +227,12 @@ void Pht::lookup(Key k, Pht::LookupCallback cb, DoneCallbackSimple done_cb, bool
     lookupStep(prefix, lo, hi, values, 
         [=](std::vector<std::shared_ptr<IndexEntry>>& entries, Prefix p) {
             std::vector<std::shared_ptr<Value>> vals;
+
             std::transform(entries.begin(), entries.end(), vals.begin(),
                 [](const std::shared_ptr<IndexEntry>& ie) {
                     return std::make_shared<Value>(ie->value);
             });
+
             cb(vals, p);
         }, done_cb, max_common_prefix_len, cache_.lookup(prefix));
 }
@@ -256,11 +258,13 @@ void Pht::updateCanary(Prefix p) {
     }
 }
 
-void Pht::insert(Key k, Value v, DoneCallbackSimple done_cb, std::string from, time_point created) {
-    if (created + ValueType::USER_DATA.expiration < clock::now()) return;
+void Pht::insert(Key k, Value v, DoneCallbackSimple done_cb) {
+    // if (created + ValueType::USER_DATA.expiration < clock::now()) return;
+    
     Prefix kp = linearize(k);
 
     std::cerr << " Prefix total " << kp.toString() << std::endl;
+
     auto lo = std::make_shared<int>(0);
     auto hi = std::make_shared<int>(kp.size_);
     auto vals = std::make_shared<std::vector<std::shared_ptr<IndexEntry>>>();
@@ -295,10 +299,7 @@ void Pht::insert(Key k, Value v, DoneCallbackSimple done_cb, std::string from, t
                 }
                 else {
                     /* Need to split but we can't since the key is not long enouth */
-                    if ( final_prefix->size_ < kp.size_ ) 
-                        *final_prefix = kp.getPrefix(final_prefix->size_+1);
-
-                    real_insert( final_prefix, std::move(entry));
+                    split(*final_prefix, vals, entry, real_insert);
                 }
 
 

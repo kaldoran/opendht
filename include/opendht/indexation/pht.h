@@ -223,7 +223,7 @@ public:
     /**
      * Adds an entry into the index.
      */
-    void insert(Key k, Value v, DoneCallbackSimple cb = {}, std::string from = "NO where", time_point created = time_point::max());
+    void insert(Key k, Value v, DoneCallbackSimple cb = {});
 
 private:
 
@@ -241,6 +241,7 @@ private:
          * @param p : Prefix that we are looking for
          * @return  : The size of the longest prefix known in the cache between 0 and p.size_
          */
+
         int lookup(const Prefix& p);
 
     private:
@@ -314,7 +315,7 @@ private:
                     // dht_->put(next_prefix.hash(), entry);
                     // std::cerr << "New canary found ! " << next_prefix.toString() << std::endl;
 
-                    insert(k, entry.value, nullptr, "Listen");
+                    insert(k, entry.value, nullptr);
 
 
                     /* Cancel listen since we found where we need to update*/
@@ -328,6 +329,28 @@ private:
                 return v.user_type.compare(0, name_.size(), name_) == 0;
             }
         );
+    }
+
+    size_t foundSplitLocation(Prefix compared, std::shared_ptr<std::vector<std::shared_ptr<IndexEntry>>> vals) {
+
+        for ( auto i = 0; i <= compared.size_; i++ ) 
+            for ( auto const& v : *vals)
+                if ( Prefix(v->prefix).isActiveBit(i) != compared.isActiveBit(i) )
+                    return i;
+
+        return compared.size_;
+    }
+
+    void split(Prefix insert, std::shared_ptr<std::vector<std::shared_ptr<IndexEntry>>> vals, IndexEntry entry, RealInsertCallback end_cb ) {
+        auto full = Prefix(entry.prefix);
+
+        auto loc = foundSplitLocation(full, vals);
+        auto prefix_to_insert = std::make_shared<Prefix>(full.getPrefix(loc + (loc != full.size_ )));
+
+        for (; loc >= insert.size_; --loc)
+            updateCanary(full.getPrefix(loc));
+
+        end_cb(prefix_to_insert, entry);
     }
 
     /**
@@ -399,6 +422,7 @@ private:
      * Performs a step in the lookup operation. Each steps are performed
      * asynchronously.
      */
+
     bool validKey(const Key& k) const {
         return k.size() == keySpec_.size() and
             std::equal(k.begin(), k.end(), keySpec_.begin(),

@@ -323,7 +323,6 @@ private:
             if ( value->user_type != canary_)
                 (*total)++;
 
-            std::cerr << "Total data " << *total << " Data " << *value << std::endl;
             return true;
         };
 
@@ -335,8 +334,6 @@ private:
                     end_cb(parent, std::move(entry));
                 else
                     end_cb(p, std::move(entry));
-
-                std::cerr << "Total " << *total << " Out of "  << MAX_NODE_ENTRY_COUNT  << " PUT " << p->toString() << std::endl;
             }
         };
 
@@ -402,19 +399,19 @@ private:
                 if ( Prefix(v->prefix).isActiveBit(i) != compared.isActiveBit(i) )
                     return i;
 
-        return compared.size_;
+        return compared.size_ - 1;
     }
 
     void split(Prefix insert, std::shared_ptr<std::vector<std::shared_ptr<IndexEntry>>> vals, IndexEntry entry, RealInsertCallback end_cb ) {
-        std::cerr << "SPLIT" << std::endl;
+        std::cerr << "split" << std::endl;
         auto full = Prefix(entry.prefix);
 
         auto loc = foundSplitLocation(full, vals);
-        auto prefix_to_insert = std::make_shared<Prefix>(full.getPrefix(loc + (loc != full.size_ )));
+        auto prefix_to_insert = std::make_shared<Prefix>(full.getPrefix(loc + 1));
 
-        for (; loc >= insert.size_; --loc)
+        for (; loc > insert.size_; --loc)
             updateCanary(full.getPrefix(loc));
-
+        
         end_cb(prefix_to_insert, entry);
     }
 

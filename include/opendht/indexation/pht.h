@@ -124,11 +124,18 @@ struct Prefix {
      * @throw out_of_range Throw out of range if bit does not exist
      */
     Prefix swapBit(size_t bit) const {
+<<<<<<< HEAD
 	if ( bit >= size_ )
 	    throw std::out_of_range("bit larger than prefix size.");
 
         Prefix copy = *this;
 
+=======
+        if ( bit >= size_ ) 
+            throw std::out_of_range("bit larger than prefix size.");
+
+        Prefix copy = *this;
+>>>>>>> 3302606d375db520ae2d82c7b1658cfe80984f2e
         size_t offset_bit = (8 - bit) % 8;
         copy.content_[bit / 8] ^= (1 << offset_bit);
 
@@ -173,7 +180,7 @@ public:
     /* This is the maximum number of entries per node. This parameter is
      * critical and influences the traffic a lot during a lookup operation.
      */
-    static constexpr const size_t MAX_NODE_ENTRY_COUNT {2};
+    static constexpr const size_t MAX_NODE_ENTRY_COUNT {2}; // FIX : 16
 
     /* A key for a an index entry */
     using Key = std::map<std::string, Blob>;
@@ -285,73 +292,16 @@ private:
     virtual Prefix linearize(Key k) const {
         if (not validKey(k)) { throw std::invalid_argument(INVALID_KEY); }
 
-        Prefix p = Blob {k.begin()->second.begin(), k.begin()->second.begin() + keySpec_.begin()->second + 1};
-        return p.swapBit(k.begin()->second.size() * 8 + 1);
+        Prefix p = Blob {k.begin()->second.begin(), k.begin()->second.end()};
+
+        auto bit_loc = p.size_ + 1;
+        for ( auto i = p.content_.size(); i <= keySpec_.begin()->second; i++ ) {
+            p.content_.push_back(0);
+            p.size_ += 8;
+        }
+
+        return p.swapBit(bit_loc);
     };
-
-    /**
-     * Check if there is a new canary on the next bit of the prefix p,
-     * If there is a new one then it will re-put the data there.
-     *
-     * @param p      Prefix that need to be kept update
-     * @paran entry  The entry to put back
-     */
-    void checkPhtUpdate(Key k, Prefix p, IndexEntry entry) {
-
-        Prefix full = entry.prefix;
-        std::cerr << "SIZE : " << p.size_ << " - FUll" << full.size_<< std::endl;
-        if ( p.size_ >= full.size_ ) return;
-
-        auto next_prefix = full.getPrefix( p.size_ + 1 ); 
-
-        dht_->listen(next_prefix.hash(),
-            [=](const std::shared_ptr<dht::Value> &value) {
-                if (value->user_type == canary_) {
-                    // updateCanary(next_prefix);
-                    // checkPhtUpdate(next_prefix, entry);          
-                    // std::cerr << " LISTEN PUT HERE " << next_prefix.toString() << std::endl;                           
-                    // dht_->put(next_prefix.hash(), std::move(entry));
-                    // checkPhtUpdate(next_prefix, entry);
-                    // dht_->put(next_prefix.hash(), entry);
-                    // std::cerr << "New canary found ! " << next_prefix.toString() << std::endl;
-
-                    insert(k, entry.value, nullptr);
-
-
-                    /* Cancel listen since we found where we need to update*/
-                    return false;
-                }
-
-                return true;
-            },
-            [=](const dht::Value& v) {
-                /* Filter value v thats start with the same name as ours */
-                return v.user_type.compare(0, name_.size(), name_) == 0;
-            }
-        );
-    }
-
-    size_t foundSplitLocation(Prefix compared, std::shared_ptr<std::vector<std::shared_ptr<IndexEntry>>> vals) {
-
-        for ( auto i = 0; i <= compared.size_; i++ ) 
-            for ( auto const& v : *vals)
-                if ( Prefix(v->prefix).isActiveBit(i) != compared.isActiveBit(i) )
-                    return i;
-
-        return compared.size_;
-    }
-
-    void split(Prefix insert, std::shared_ptr<std::vector<std::shared_ptr<IndexEntry>>> vals, IndexEntry entry, RealInsertCallback end_cb ) {
-        auto full = Prefix(entry.prefix);
-
-        auto loc = foundSplitLocation(full, vals);
-        auto prefix_to_insert = std::make_shared<Prefix>(full.getPrefix(loc + (loc != full.size_ )));
-
-        for (; loc >= insert.size_; --loc)
-            updateCanary(full.getPrefix(loc));
-
-        end_cb(prefix_to_insert, entry);
-    }
 
     /**
      * Looking where to put the data cause if there i free space on the node above then this node will became the real leave.
@@ -369,7 +319,7 @@ private:
 
         auto total = std::make_shared<unsigned int>(0); /* Will contains the total number of data on 3 nodes */
         auto ended = std::make_shared<unsigned int>(0); /* Just indicate how many have end */
-        
+
         auto parent = std::make_shared<Prefix>(p->getPrefix(-1));
         auto sibling = std::make_shared<Prefix>(p->getSibling());
 
@@ -382,7 +332,6 @@ private:
             if ( value->user_type != canary_)
                 (*total)++;
 
-            std::cerr << "Total data " << *total << " Data " << *value << std::endl;
             return true;
         };
 
@@ -394,8 +343,6 @@ private:
                     end_cb(parent, std::move(entry));
                 else
                     end_cb(p, std::move(entry));
-
-                std::cerr << "Total " << *total << " Out of "  << MAX_NODE_ENTRY_COUNT  << " PUT " << p->toString() << std::endl;
             }
         };
 
@@ -419,10 +366,67 @@ private:
     }
 
     /**
-     * Performs a step in the lookup operation. Each steps are performed
-     * asynchronously.
+     * Tells if the key is valid according to the key spec.
      */
+    void checkPhtUpdate(Key k, Prefix p, IndexEntry entry) {
 
+        Prefix full = entry.prefix;
+        if ( p.size_ >= full.size_ ) return;
+
+        auto next_prefix = full.getPrefix( p.size_ + 1 ); 
+
+        dht_->listen(next_prefix.hash(),
+            [=](const std::shared_ptr<dht::Value> &value) {
+                if (value->user_type == canary_) {
+                    // updateCanary(next_prefix);
+                    // checkPhtUpdate(next_prefix, entry);
+                    // std::cerr << " LISTEN PUT HERE " << next_prefix.toString() << std::endl;
+                    // dht_->put(next_prefix.hash(), std::move(entry));
+                    // checkPhtUpdate(next_prefix, entry);
+                    // dht_->put(next_prefix.hash(), entry);
+                    // std::cerr << "New canary found ! " << next_prefix.toString() << std::endl;
+
+                    insert(k, entry.value, nullptr);
+
+                    /* Cancel listen since we found where we need to update*/
+                    return false;
+                }
+
+                return true;
+            },
+            [=](const dht::Value& v) {
+                /* Filter value v thats start with the same name as ours */
+                return v.user_type.compare(0, name_.size(), name_) == 0;
+            }
+        );
+    }
+
+    size_t foundSplitLocation(Prefix compared, std::shared_ptr<std::vector<std::shared_ptr<IndexEntry>>> vals) {
+        std::cerr << "Found split loc" << std::endl;
+        for ( auto i = 0; i < compared.size_; i++ ) 
+            for ( auto const& v : *vals)
+                if ( Prefix(v->prefix).isActiveBit(i) != compared.isActiveBit(i) )
+                    return i;
+
+        return compared.size_ - 1;
+    }
+
+    void split(Prefix insert, std::shared_ptr<std::vector<std::shared_ptr<IndexEntry>>> vals, IndexEntry entry, RealInsertCallback end_cb ) {
+        std::cerr << "split" << std::endl;
+        auto full = Prefix(entry.prefix);
+
+        auto loc = foundSplitLocation(full, vals);
+        auto prefix_to_insert = std::make_shared<Prefix>(full.getPrefix(loc + 1));
+
+        for (; loc > insert.size_; --loc)
+            updateCanary(full.getPrefix(loc));
+        
+        end_cb(prefix_to_insert, entry);
+    }
+
+    /**
+     * Tells if the key is valid according to the key spec.
+     */
     bool validKey(const Key& k) const {
         return k.size() == keySpec_.size() and
             std::equal(k.begin(), k.end(), keySpec_.begin(),

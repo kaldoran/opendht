@@ -306,7 +306,11 @@ class PhtTest(FeatureTest):
                     DhtNetwork.log('This insert step took : ', time_taken, 'second')
                 FeatureTest.lock.wait()
 
+<<<<<<< HEAD
         # FIX : remove next line
+=======
+        # FIX : Remove next line
+>>>>>>> 3302606d375db520ae2d82c7b1658cfe80984f2e
         time.sleep(30)
 
         # Recover entries now that the trie is complete.

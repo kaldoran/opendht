@@ -12,13 +12,13 @@ void Pht::Cache::insert(const Prefix& p) {
 
     while ((leaves_.size() > 0 && leaves_.begin()->first + NODE_EXPIRE_TIME < now) || leaves_.size() > MAX_ELEMENT)
         leaves_.erase(leaves_.begin());
-
-    if (not (curr_node = root_.lock())) {
+    
+    if (not (curr_node = root_.lock()) ) {
         /* Root does not exist, need to create one*/
         curr_node = std::make_shared<Node>();
         root_ = curr_node;
     }
-
+ 
     curr_node->last_reply = now;
 
     /* Iterate through all bit of the Blob */
@@ -49,7 +49,7 @@ void Pht::Cache::insert(const Prefix& p) {
 }
 
 int Pht::Cache::lookup(const Prefix& p) {
-    int pos = 0;
+    int pos = -1;
     auto now = clock::now(), last_node_time = now;
 
     /* Before lookup remove the useless one [i.e. too old] */
@@ -61,6 +61,8 @@ int Pht::Cache::lookup(const Prefix& p) {
     std::shared_ptr<Node> curr_node;
 
     while ( auto n = next.lock() ) {
+        ++pos;
+
         /* Safe since pos is equal to 0 until here */
         if ( (unsigned) pos >= p.size_ ) break;
 
@@ -70,11 +72,9 @@ int Pht::Cache::lookup(const Prefix& p) {
 
         /* Get the Prefix bit by bit, starting from left */
         next = ( p.isActiveBit(pos) ) ? curr_node->right_child : curr_node->left_child;
-
-        ++pos;
     }
 
-    if ( pos > 0 ) {
+    if ( pos >= 0 ) {
         auto to_erase = leaves_.find(last_node_time);
         if ( to_erase != leaves_.end() )
             leaves_.erase( to_erase );
@@ -82,7 +82,7 @@ int Pht::Cache::lookup(const Prefix& p) {
         leaves_.emplace( std::move(now), std::move(curr_node) );
     }
 
-    return --pos;
+    return pos;
 }
 
 const ValueType IndexEntry::TYPE = ValueType::USER_DATA;
@@ -143,14 +143,16 @@ void Pht::lookupStep(Prefix p, std::shared_ptr<int> lo, std::shared_ptr<int> hi,
         };
 
         auto on_get = [=](const std::shared_ptr<dht::Value>& value, std::shared_ptr<node_lookup_result> res) {
-            if (value->user_type == canary_)
+            if (value->user_type == canary_) {
                 res->is_pht = true;
+            }
             else {
                 IndexEntry entry;
                 entry.unpackValue(*value);
 
                 if (max_common_prefix_len) { /* inexact match case */
                     auto common_bits = Prefix::commonBits(p, entry.prefix);
+
                     if (vals->empty()) {
                         vals->emplace_back(std::make_shared<IndexEntry>(entry));
                         *max_common_prefix_len = common_bits;
@@ -222,11 +224,9 @@ void Pht::lookup(Key k, Pht::LookupCallback cb, DoneCallbackSimple done_cb, bool
     auto hi = std::make_shared<int>(prefix.size_);
     std::shared_ptr<unsigned> max_common_prefix_len = not exact_match ? std::make_shared<unsigned>(0) : nullptr;
 
-    std::cerr << "Lookup here : "  << prefix.toString() << " Cache : " << cache_.lookup(prefix) << std::endl;
-
     lookupStep(prefix, lo, hi, values, 
         [=](std::vector<std::shared_ptr<IndexEntry>>& entries, Prefix p) {
-            std::vector<std::shared_ptr<Value>> vals;
+            std::vector<std::shared_ptr<Value>> vals(entries.size());
 
             std::transform(entries.begin(), entries.end(), vals.begin(),
                 [](const std::shared_ptr<IndexEntry>& ie) {
@@ -241,7 +241,6 @@ void Pht::updateCanary(Prefix p) {
     // TODO: change this... copy value
     dht::Value canary_value;
     canary_value.user_type = canary_;
-    std::cerr << "Canary here " << p.toString() << std::endl;
     dht_->put(p.hash(), std::move(canary_value),
         [=](bool){
             static std::bernoulli_distribution d(0.5);
@@ -298,8 +297,10 @@ void Pht::insert(Key k, Value v, DoneCallbackSimple done_cb) {
                     getRealPrefix(final_prefix, std::move(entry), real_insert);
                 }
                 else {
-                    /* Need to split but we can't since the key is not long enouth */
-                    split(*final_prefix, vals, entry, real_insert);
+                    if ( final_prefix->size_ == kp.size_ )
+                        real_insert(final_prefix, std::move(entry));
+                    else
+                        split(*final_prefix, vals, entry, real_insert);
                 }
 
 

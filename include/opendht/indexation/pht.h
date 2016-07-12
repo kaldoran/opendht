@@ -17,6 +17,25 @@
 namespace dht {
 namespace indexation {
 
+struct PrefixBis {
+
+    Prefix(const Prefix&p) {}
+
+    Prefix toPrefix() {
+        Blo pb;
+        for ( size_t i = 0; i < p.size(); i++) {
+            auto b = content_[i / 8] | 0x55;
+            if ( b != 0xFF ) throw std::domain_error("Can not convert to prefix with undefine bits"); 
+
+            p.push_back(content_[i / 8] & 0x55);
+        }
+        return;
+    }
+
+    size_t size_ {0};
+    Blob content_ {};
+
+}
 /*!
  * @class   Prefix
  * @brief   A blob structure which prefixes a Key in the PHT.
@@ -124,18 +143,10 @@ struct Prefix {
      * @throw out_of_range Throw out of range if bit does not exist
      */
     Prefix swapBit(size_t bit) const {
-<<<<<<< HEAD
-	if ( bit >= size_ )
-	    throw std::out_of_range("bit larger than prefix size.");
-
-        Prefix copy = *this;
-
-=======
         if ( bit >= size_ ) 
             throw std::out_of_range("bit larger than prefix size.");
 
         Prefix copy = *this;
->>>>>>> 3302606d375db520ae2d82c7b1658cfe80984f2e
         size_t offset_bit = (8 - bit) % 8;
         copy.content_[bit / 8] ^= (1 << offset_bit);
 
@@ -230,9 +241,23 @@ public:
     /**
      * Adds an entry into the index.
      */
-    void insert(Key k, Value v, DoneCallbackSimple cb = {});
+    void insert(Key k, Value v, DoneCallbackSimple done_cb = {}) {
+        Prefix p = linearize(k);
+
+        auto lo = std::make_shared<int>(0);
+        auto hi = std::make_shared<int>(p.size_);
+
+        IndexEntry entry;
+        entry.value = v;
+        entry.prefix = p.content_;
+        entry.name = name_;
+
+        Pht::insert(p, entry, lo, hi, clock::now(), done_cb);
+    }
 
 private:
+    void insert( Prefix kp, IndexEntry entry, std::shared_ptr<int> lo, std::shared_ptr<int> hi, time_point time_p,
+                 DoneCallbackSimple done_cb = {});
 
     class Cache {
     public:
@@ -368,7 +393,7 @@ private:
     /**
      * Tells if the key is valid according to the key spec.
      */
-    void checkPhtUpdate(Key k, Prefix p, IndexEntry entry) {
+    void checkPhtUpdate(Prefix p, IndexEntry entry, time_point time_p) {
 
         Prefix full = entry.prefix;
         if ( p.size_ >= full.size_ ) return;
@@ -378,15 +403,7 @@ private:
         dht_->listen(next_prefix.hash(),
             [=](const std::shared_ptr<dht::Value> &value) {
                 if (value->user_type == canary_) {
-                    // updateCanary(next_prefix);
-                    // checkPhtUpdate(next_prefix, entry);
-                    // std::cerr << " LISTEN PUT HERE " << next_prefix.toString() << std::endl;
-                    // dht_->put(next_prefix.hash(), std::move(entry));
-                    // checkPhtUpdate(next_prefix, entry);
-                    // dht_->put(next_prefix.hash(), entry);
-                    // std::cerr << "New canary found ! " << next_prefix.toString() << std::endl;
-
-                    insert(k, entry.value, nullptr);
+                    insert(p, entry, std::make_shared<int>(0), std::make_shared<int>(p.size_), time_p, nullptr);
 
                     /* Cancel listen since we found where we need to update*/
                     return false;
@@ -402,8 +419,7 @@ private:
     }
 
     size_t foundSplitLocation(Prefix compared, std::shared_ptr<std::vector<std::shared_ptr<IndexEntry>>> vals) {
-        std::cerr << "Found split loc" << std::endl;
-        for ( auto i = 0; i < compared.size_; i++ ) 
+        for ( size_t i = 0; i < compared.size_; i++ ) 
             for ( auto const& v : *vals)
                 if ( Prefix(v->prefix).isActiveBit(i) != compared.isActiveBit(i) )
                     return i;
@@ -412,7 +428,6 @@ private:
     }
 
     void split(Prefix insert, std::shared_ptr<std::vector<std::shared_ptr<IndexEntry>>> vals, IndexEntry entry, RealInsertCallback end_cb ) {
-        std::cerr << "split" << std::endl;
         auto full = Prefix(entry.prefix);
 
         auto loc = foundSplitLocation(full, vals);

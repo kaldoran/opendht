@@ -257,15 +257,12 @@ void Pht::updateCanary(Prefix p) {
     }
 }
 
-void Pht::insert(Key k, Value v, DoneCallbackSimple done_cb) {
-    // if (created + ValueType::USER_DATA.expiration < clock::now()) return;
-    
-    Prefix kp = linearize(k);
 
-    std::cerr << " Prefix total " << kp.toString() << std::endl;
+void Pht::insert(Prefix kp, IndexEntry entry, std::shared_ptr<int> lo, std::shared_ptr<int> hi, time_point time_p,
+                 DoneCallbackSimple done_cb) {
 
-    auto lo = std::make_shared<int>(0);
-    auto hi = std::make_shared<int>(kp.size_);
+    if (time_p + ValueType::USER_DATA.expiration < clock::now()) return;
+
     auto vals = std::make_shared<std::vector<std::shared_ptr<IndexEntry>>>();
     auto final_prefix = std::make_shared<Prefix>();
 
@@ -279,22 +276,15 @@ void Pht::insert(Key k, Value v, DoneCallbackSimple done_cb) {
                     done_cb(false);
             } else {
 
-                IndexEntry entry;
-                entry.value = v;
-                entry.prefix = kp.content_;
-                entry.name = name_;
-
                 RealInsertCallback real_insert = [=]( std::shared_ptr<Prefix> p, IndexEntry entry) {
                     updateCanary(*p);
-                    checkPhtUpdate(k, *p, entry);
+                    checkPhtUpdate(*p, entry, time_p);
                     cache_.insert(*p);
-                    dht_->put(p->hash(), std::move(entry), done_cb);
+                    dht_->put(p->hash(), std::move(entry), done_cb, time_p);
                 };
 
-                std::cerr << "Vals size " << vals->size() << std::endl;
-
                 if ( vals->size() < MAX_NODE_ENTRY_COUNT ) {
-                    getRealPrefix(final_prefix, std::move(entry), real_insert);
+                    real_insert(final_prefix, std::move(entry));
                 }
                 else {
                     if ( final_prefix->size_ == kp.size_ )

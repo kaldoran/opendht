@@ -17,6 +17,77 @@
 namespace dht {
 namespace indexation {
 
+struct InfoPrefix {
+    InfoPrefix() {}
+    InfoPrefix(const InfoPrefix& p, size_t first) :
+        size_(std::min(first, p.content_.size()*8)),
+        content_(Blob(p.content_.begin(), p.content_.begin()+size_/8))
+    {
+        auto rem = size_ % 8;
+        if (rem)
+            content_.push_back(p.content_[size_/8] & (0xFF << (8 - rem)));
+    }
+
+
+    InfoPrefix getPrefix(ssize_t len) const {
+        if ((size_t)std::abs(len) > size_)
+            throw std::out_of_range("len larger than prefix size.");
+        if (len < 0)
+            len += size_;
+        return InfoPrefix(*this, len);
+    }
+
+    /**
+     * This method swap the bit a the position 'bit' and return the new prefix
+     *
+     * @param bit Position of the bit to swap
+     * @return The prefix with the bit at position 'bit' swapped
+     * @throw out_of_range Throw out of range if bit does not exist
+     */
+    Prefix swapBit(size_t bit) const {
+        if ( bit >= size_ )
+            throw std::out_of_range("bit larger than prefix size.");
+
+        Prefix copy = *this;
+
+        size_t offset_bit = (8 - bit) % 8;
+        copy.content_[bit / 8] ^= (1 << offset_bit);
+
+        return copy;
+    }
+
+
+    /**
+     * Method for getting the state of the bit at the position pos.
+     * @param pos : Pos of the needed bit
+     * @return : true if the bit is at 1
+     *           false otherwise
+     * @throw out_of_range Throw out of range if the bit at 'pos' does not exist
+     */
+    bool isActiveBit(size_t pos) const {
+        if ( pos >= size_ )
+            throw std::out_of_range("Can't detect active bit at pos, pos larger than prefix size or empty prefix");
+
+        return ((this->content_[pos / 8] >> (7 - (pos % 8)) ) & 1) == 1;
+    }
+
+    std::string toString() const {
+        std::stringstream ss;
+        auto bn = size_ % 8;
+        auto n = size_ / 8;
+        for (size_t i = 0; i<n; i++)
+            ss << std::bitset<8>(content_[i]);
+        if (bn)
+            for (unsigned b=0; b<bn; b++)
+                ss << (char)((content_[n] & (1 << (7 - b))) ? '1':'0');
+        return ss.str();
+    }
+
+
+    size_t size_ {0};
+    Blob content_ {};
+};
+
 /*!
  * @class   Prefix
  * @brief   A blob structure which prefixes a Key in the PHT.
@@ -26,7 +97,7 @@ namespace indexation {
  * the node in question is a leaf, *the label is a prefix of all the keys
  * contained in the leaf*.
  */
-struct Prefix {
+struct Prefix : InfoPrefix {
     Prefix() {}
     Prefix(InfoHash h) : size_(h.size() * 8), content_(h.begin(), h.end()) {}
     Prefix(const Blob& d) : size_(d.size()*8), content_(d) {}
@@ -120,7 +191,6 @@ struct Prefix {
      * @param bit Position of the bit to swap
      *
      * @return The prefix with the bit at position 'bit' swapped
-     *
      * @throw out_of_range Throw out of range if bit does not exist
      */
     Prefix swapBit(size_t bit) const {
@@ -134,9 +204,6 @@ struct Prefix {
 
         return copy;
     }
-
-    size_t size_ {0};
-    Blob content_ {};
 };
 
 using Value = std::pair<InfoHash, dht::Value::Id>;

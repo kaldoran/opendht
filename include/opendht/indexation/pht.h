@@ -123,7 +123,41 @@ struct Prefix {
      *
      * @throw out_of_range Throw out of range if bit does not exist
      */
-    Prefix swapBit(size_t bit) const {
+    void swapContentBit(size_t bit) const {
+        swapBit(content_, bit);
+    }
+
+    void swapFlagBit(size_t bit) const {
+        swapBit(flags_, bit);
+    }
+
+    size_t size_ {0};
+
+    Blob content_ {};
+private:
+    std::stringstream blobToString(Blob &b) const {
+        std::stringstream ss;
+
+        auto bn = size_ % 8;
+        auto n = size_ / 8;
+
+        for (size_t i = 0; i<n; i++)
+            ss << std::bitset<8>(b[i]);
+        if (bn)
+            for (unsigned b=0; b<bn; b++)
+                ss << (char)((b[n] & (1 << (7 - b))) ? '1':'0');
+
+        return ss;
+    }
+
+    bool isActiveBit(Blob &b, size_t pos) const {
+        if ( pos >= size_ )
+            throw std::out_of_range("Can't detect active bit at pos, pos larger than prefix size or empty prefix");
+
+        return ((b[pos / 8] >> (7 - (pos % 8)) ) & 1) == 1;
+    }
+
+    void swapBit(Blob &&b, size_t bit) const {
         if ( bit >= size_ )
             throw std::out_of_range("bit larger than prefix size.");
 

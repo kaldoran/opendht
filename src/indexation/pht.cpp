@@ -25,7 +25,7 @@ void Pht::Cache::insert(const Prefix& p) {
     for ( i = 0; i < p.size_; i++ ) {
 
         /* According to the bit define which node is the next one */
-        auto& next = ( p.isActiveBit(i) ) ? curr_node->right_child : curr_node->left_child;
+        auto& next = ( p.isContentBitActive(i) ) ? curr_node->right_child : curr_node->left_child;
 
         /**
          * If lock, node exists
@@ -71,7 +71,7 @@ int Pht::Cache::lookup(const Prefix& p) {
         curr_node->last_reply = now;
 
         /* Get the Prefix bit by bit, starting from left */
-        next = ( p.isActiveBit(pos) ) ? curr_node->right_child : curr_node->left_child;
+        next = ( p.isContentBitActive(pos) ) ? curr_node->right_child : curr_node->left_child;
     }
 
     if ( pos >= 0 ) {

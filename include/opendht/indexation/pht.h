@@ -91,7 +91,7 @@ struct Prefix {
     std::string toString() const {
         std::stringstream ss;
 
-        ss << "Content_ : "
+        ss << "Content_ : ";
         ss << blobToString(content_);
         ss << std::endl;
 
@@ -159,7 +159,7 @@ struct Prefix {
 
         // if needed fill remaining bit
         if ( csize )
-            flags.push_back(0xFF << (8 - csize));
+            flags_.push_back(0xFF << (8 - csize));
 
         // Complet vector space missing
         for ( auto i = flags_.size(); i < content_.size(); i++ )
@@ -171,19 +171,19 @@ struct Prefix {
     Blob flags_ {};
     Blob content_ {};
 private:
-    std::stringstream blobToString(Blob &bl) const {
+    std::string blobToString(const Blob &bl) const {
         std::stringstream ss;
 
         auto bn = size_ % 8;
-        auto n = size_ / 8
+        auto n = size_ / 8;
 
         for (size_t i = 0; i < n; i++)
-            ss << std::bitset<8>(b[i]);
+            ss << std::bitset<8>(bl[i]);
         if (bn)
             for (unsigned b=0; b < bn; b++)
                 ss << (char)((bl[n] & (1 << (7 - b))) ? '1':'0');
 
-        return ss;
+        return ss.str();
     }
 
     Blob addPadding(Blob toP, size_t size) {
@@ -193,18 +193,18 @@ private:
         for ( auto i = copy.size(); i <= size; i++ )
             copy.push_back(0);
 
-        swapBit(bit_loc);
+        swapBit(toP, bit_loc);
         return copy;
     }
 
-    bool isActiveBit(Blob &b, size_t pos) const {
+    bool isActiveBit(const Blob &b, size_t pos) const {
         if ( pos >= size_ )
             throw std::out_of_range("Can't detect active bit at pos, pos larger than prefix size or empty prefix");
 
         return ((b[pos / 8] >> (7 - (pos % 8)) ) & 1) == 1;
     }
 
-    void swapBit(Blob &&b, size_t bit) {
+    void swapBit(Blob &b, size_t bit) {
         if ( bit >= size_ )
             throw std::out_of_range("bit larger than prefix size.");
 
@@ -214,6 +214,25 @@ private:
 };
 
 using Value = std::pair<InfoHash, dht::Value::Id>;
+struct IndexEntry : public dht::Value::Serializable<IndexEntry> {
+    static const ValueType TYPE;
+
+    virtual void unpackValue(const dht::Value& v) {
+        Serializable<IndexEntry>::unpackValue(v);
+        name = v.user_type;
+    }
+
+    virtual dht::Value packValue() const {
+        auto pack = Serializable<IndexEntry>::packValue();
+        pack.user_type = name;
+        return pack;
+    }
+
+    Blob prefix;
+    Value value;
+    std::string name;
+    MSGPACK_DEFINE_MAP(prefix, value);
+};
 
 class Pht {
     static constexpr const char* INVALID_KEY = "Key does not match the PHT key spec.";
@@ -222,6 +241,8 @@ class Pht {
     static constexpr const char* INDEX_PREFIX = "index.pht.";
 
 public:
+
+
     /* This is the maximum number of entries per node. This parameter is
      * critical and influences the traffic a lot during a lookup operation.
      */
@@ -233,7 +254,10 @@ public:
      * serialization order of fields. */
     using KeySpec = std::map<std::string, size_t>;
 
+    using RealInsertCallback = std::function<void(std::shared_ptr<Prefix> p, IndexEntry entry )>;
     using LookupCallback = std::function<void(std::vector<std::shared_ptr<Value>>& values, Prefix p)>;
+    using LookupCallbackWrapper = std::function<void(std::vector<std::shared_ptr<IndexEntry>>& values, Prefix p)>;
+
     typedef void (*LookupCallbackRaw)(std::vector<std::shared_ptr<Value>>* values, Prefix* p, void *user_data);
     static LookupCallback
     bindLookupCb(LookupCallbackRaw raw_cb, void* user_data) {
@@ -329,11 +353,32 @@ private:
      * asynchronously.
      */
     void lookupStep(Prefix k, std::shared_ptr<int> lo, std::shared_ptr<int> hi,
-            std::shared_ptr<std::vector<std::shared_ptr<Value>>> vals, LookupCallback cb,
+            std::shared_ptr<std::vector<std::shared_ptr<IndexEntry>>> vals, LookupCallbackWrapper cb,
             DoneCallbackSimple done_cb, std::shared_ptr<unsigned> max_common_prefix_len,
             int start = -1, bool all_values = false);
+    
+    Prefix zcurve(const std::vector<Prefix>& all_prefix) {
+        Prefix p;
+        if ( all_prefix.size() == 1 ) return all_prefix[0];
 
+        for ( size_t j = 0, bit = 0; j < all_prefix[0].content_.size(); j++) {
 
+            uint8_t mask = 0x80;
+            for ( int i = 0; i < 8; ) {
+                uint8_t o = 0;
+                for ( int k = 0 ; k < 8; k++, bit++ ) {
+                     auto diff = k - i;
+                     auto x = all_prefix[bit].content_[j] & mask;
+                     o |= ( diff >= 0 ) ? x >> diff : x << std::abs(diff);
+                     if ( bit == all_prefix.size() ) { bit = -1; ++i; mask >>= 1; }
+                }
+                p.content_.push_back(o);
+            }
+        }
+
+        p.toString();
+        return p;   
+    }
 
     /**
      * Linearizes the key into a unidimensional key. A pht only takes
@@ -347,11 +392,11 @@ private:
         if (not validKey(k)) { throw std::invalid_argument(INVALID_KEY); }
         std::vector<Prefix> all_prefix;
         auto max = std::max_element(keySpec_.begin(), keySpec_.end(), 
-            [](const std::pair<string, size_t>& a, const std::pair<string, size_t>& b) {
+            [&](const std::pair<std::string, size_t>& a, const std::pair<std::string, size_t>& b) {
                 return a.second < b.second;
             });
 
-        for ( auto i = 0; i < k.size; i++ ) {
+        for ( auto i = 0; i < k.size(); i++ ) {
             Prefix p = Blob {k.begin()->second.begin(), k.begin()->second.end()};
             p.addPaddingContent(max);
             p.updateFlags();
@@ -361,6 +406,8 @@ private:
 
         return zcurve(all_prefix);
     };
+
+
 
     /**
      * Tells if the key is valid according to the key spec.

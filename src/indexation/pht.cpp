@@ -280,7 +280,7 @@ void Pht::insert(Prefix kp, IndexEntry entry, std::shared_ptr<int> lo, std::shar
                     updateCanary(*p);
                     checkPhtUpdate(*p, entry, time_p);
                     cache_.insert(*p);
-                    dht_->put(p->hash(), std::move(entry), done_cb, time_p);
+                    dht_->put(p->hash(), std::move(entry), done_cb /*, time_p */);
                 };
 
                 if ( vals->size() < MAX_NODE_ENTRY_COUNT ) {

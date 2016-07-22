@@ -357,7 +357,7 @@ private:
             DoneCallbackSimple done_cb, std::shared_ptr<unsigned> max_common_prefix_len,
             int start = -1, bool all_values = false);
     
-    Prefix zcurve(const std::vector<Prefix>& all_prefix) {
+    Prefix zcurve(const std::vector<Prefix>& all_prefix) const {
         Prefix p;
         if ( all_prefix.size() == 1 ) return all_prefix[0];
 
@@ -376,7 +376,7 @@ private:
             }
         }
 
-        p.toString();
+        std::cerr << " TO STRING : " << p.toString() << std::endl;
         return p;   
     }
 
@@ -390,24 +390,28 @@ private:
      */
     virtual Prefix linearize(Key k) const {
         if (not validKey(k)) { throw std::invalid_argument(INVALID_KEY); }
+
+        
+
         std::vector<Prefix> all_prefix;
         auto max = std::max_element(keySpec_.begin(), keySpec_.end(), 
             [&](const std::pair<std::string, size_t>& a, const std::pair<std::string, size_t>& b) {
                 return a.second < b.second;
-            });
-
+            })->second;
+        std::cerr << "ICI max " << max  << std::endl;
         for ( auto i = 0; i < k.size(); i++ ) {
             Prefix p = Blob {k.begin()->second.begin(), k.begin()->second.end()};
             p.addPaddingContent(max);
             p.updateFlags();
 
+            std::cerr << p.toString() << std::endl;
             all_prefix.push_back(p);
         }
 
+
+
         return zcurve(all_prefix);
     };
-
-
 
     /**
      * Tells if the key is valid according to the key spec.
@@ -421,6 +425,116 @@ private:
             );
     }
 
+    /**
+     * Looking where to put the data cause if there i free space on the node above then this node will became the real leave.
+     *
+     * @param p       Share_ptr on the Prefix to check
+     * @param entry   The entry to put at the prefix p
+     * @param end_cb  Callback to use at the end of counting
+     */
+    void getRealPrefix(std::shared_ptr<Prefix> p, IndexEntry entry, RealInsertCallback end_cb ) {
+
+        if ( p->size_ == 0 ) {
+            end_cb(p, std::move(entry));
+            return;
+        }
+
+        auto total = std::make_shared<unsigned int>(0); /* Will contains the total number of data on 3 nodes */
+        auto ended = std::make_shared<unsigned int>(0); /* Just indicate how many have end */
+
+        auto parent = std::make_shared<Prefix>(p->getPrefix(-1));
+        auto sibling = std::make_shared<Prefix>(p->getSibling());
+
+        auto pht_filter = [&](const dht::Value& v) {
+            return v.user_type.compare(0, name_.size(), name_) == 0;
+        };
+
+        /* Lambda will count total number of data node */
+        auto count = [=]( const std::shared_ptr<dht::Value> value ) {
+            if ( value->user_type != canary_)
+                (*total)++;
+
+            return true;
+        };
+
+        auto on_done = [=] ( bool ) {
+            (*ended)++;
+            /* Only the last one do the CallBack*/
+            if  ( *ended == 3 ) {
+                if ( *total < MAX_NODE_ENTRY_COUNT )
+                    end_cb(parent, std::move(entry));
+                else
+                    end_cb(p, std::move(entry));
+            }
+        };
+
+        dht_->get(parent->hash(),
+            count,
+            on_done,
+            pht_filter
+        );
+
+        dht_->get(p->hash(),
+            count,
+            on_done,
+            pht_filter
+        );
+
+        dht_->get(sibling->hash(),
+            count,
+            on_done,
+            pht_filter
+        );
+    }
+
+    /**
+     * Tells if the key is valid according to the key spec.
+     */
+    void checkPhtUpdate(Prefix p, IndexEntry entry, time_point time_p) {
+
+        Prefix full = entry.prefix;
+        if ( p.size_ >= full.size_ ) return;
+
+        auto next_prefix = full.getPrefix( p.size_ + 1 ); 
+
+        dht_->listen(next_prefix.hash(),
+            [=](const std::shared_ptr<dht::Value> &value) {
+                if (value->user_type == canary_) {
+                    insert(p, entry, std::make_shared<int>(0), std::make_shared<int>(p.size_), time_p, nullptr);
+
+                    /* Cancel listen since we found where we need to update*/
+                    return false;
+                }
+
+                return true;
+            },
+            [=](const dht::Value& v) {
+                /* Filter value v thats start with the same name as ours */
+                return v.user_type.compare(0, name_.size(), name_) == 0;
+            }
+        );
+    }
+
+    size_t foundSplitLocation(Prefix compared, std::shared_ptr<std::vector<std::shared_ptr<IndexEntry>>> vals) {
+        for ( size_t i = 0; i < compared.size_; i++ ) 
+            for ( auto const& v : *vals)
+                if ( Prefix(v->prefix).isContentBitActive(i) != compared.isContentBitActive(i) )
+                    return i;
+
+        return compared.size_ - 1;
+    }
+
+    void split(Prefix insert, std::shared_ptr<std::vector<std::shared_ptr<IndexEntry>>> vals, IndexEntry entry, RealInsertCallback end_cb ) {
+        auto full = Prefix(entry.prefix);
+
+        auto loc = foundSplitLocation(full, vals);
+        auto prefix_to_insert = std::make_shared<Prefix>(full.getPrefix(loc + 1));
+
+        for (; loc > insert.size_; --loc)
+            updateCanary(full.getPrefix(loc));
+        
+        end_cb(prefix_to_insert, entry);
+}
     /**
      * Updates the canary token on the node responsible for the specified
      * Prefix.

@@ -204,7 +204,7 @@ private:
         return ((b[pos / 8] >> (7 - (pos % 8)) ) & 1) == 1;
     }
 
-    void swapBit(Blob &&b, size_t bit) const {
+    void swapBit(Blob &&b, size_t bit) {
         if ( bit >= size_ )
             throw std::out_of_range("bit larger than prefix size.");
 
@@ -269,9 +269,24 @@ public:
     /**
      * Adds an entry into the index.
      */
-    void insert(Key k, Value v, DoneCallbackSimple cb = {});
+    void insert(Key k, Value v, DoneCallbackSimple done_cb = {}) {
+        Prefix p = linearize(k);
+
+        auto lo = std::make_shared<int>(0);
+        auto hi = std::make_shared<int>(p.size_);
+
+        IndexEntry entry;
+        entry.value = v;
+        entry.prefix = p.content_;
+        entry.name = name_;
+
+        Pht::insert(p, entry, lo, hi, clock::now(), done_cb);
+    }
 
 private:
+    void insert( Prefix kp, IndexEntry entry, std::shared_ptr<int> lo, std::shared_ptr<int> hi, time_point time_p,
+                 DoneCallbackSimple done_cb = {});
+
     class Cache {
     public:
         /**

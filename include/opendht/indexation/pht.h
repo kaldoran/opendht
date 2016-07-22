@@ -29,14 +29,20 @@ namespace indexation {
 struct Prefix {
     Prefix() {}
     Prefix(InfoHash h) : size_(h.size() * 8), content_(h.begin(), h.end()) {}
-    Prefix(const Blob& d) : size_(d.size()*8), content_(d) {}
+
+    Prefix(const Blob& d) : size_(d.size()*8), content_(d) { updateFlags(); }
+    Prefix(const Blob& d, const Blob& f) : size_(d.size()*8), content_(d), flags_(f) {}
+
     Prefix(const Prefix& p, size_t first) :
         size_(std::min(first, p.content_.size()*8)),
-        content_(Blob(p.content_.begin(), p.content_.begin()+size_/8))
+        content_(Blob(p.content_.begin(), p.content_.begin()+size_/8)),
+        flags_(Blob(p.flags_.begin(), p.flags_.begin()+size_/8))
     {
         auto rem = size_ % 8;
-        if (rem)
+        if (rem) {
             content_.push_back(p.content_[size_/8] & (0xFF << (8 - rem)));
+            flags_.push_back(p.flags_[size_/8] & (0xFF << (8 - rem)));
+        }
     }
 
     Prefix getPrefix(ssize_t len) const {
@@ -54,11 +60,12 @@ struct Prefix {
      *           false otherwise
      * @throw out_of_range Throw out of range if the bit at 'pos' does not exist
      */
-    bool isActiveBit(size_t pos) const {
-        if ( pos >= size_ )
-            throw std::out_of_range("Can't detect active bit at pos, pos larger than prefix size or empty prefix");
+    bool isFlagActive(size_t pos) const {
+        return isActiveBit(flags_, pos);
+    }
 
-        return ((this->content_[pos / 8] >> (7 - (pos % 8)) ) & 1) == 1;
+    bool isContentBitActive(size_t pos) const {
+        return isActiveBit(content_, pos);
     }
 
     Prefix getFullSize() { return Prefix(*this, content_.size()*8); }
@@ -69,7 +76,10 @@ struct Prefix {
      * @return The prefix of this sibling.
      */
     Prefix getSibling() const {
-        return swapBit(size_ - 1);
+        Prefix copy = *this;
+        copy.swapContentBit(size_ - 1);
+
+        return copy;
     }
 
     InfoHash hash() const {
@@ -80,13 +90,15 @@ struct Prefix {
 
     std::string toString() const {
         std::stringstream ss;
-        auto bn = size_ % 8;
-        auto n = size_ / 8;
-        for (size_t i = 0; i<n; i++)
-            ss << std::bitset<8>(content_[i]);
-        if (bn)
-            for (unsigned b=0; b<bn; b++)
-                ss << (char)((content_[n] & (1 << (7 - b))) ? '1':'0');
+
+        ss << "Content_ : "
+        ss << blobToString(content_);
+        ss << std::endl;
+
+        ss << "Flags_ : ";
+        ss << blobToString(flags_);
+        ss << std::endl;
+
         return ss.str();
     }
 
@@ -96,8 +108,12 @@ struct Prefix {
         auto longest_prefix_size = std::min(p1.size_, p2.size_);
 
         for (i = 0; i < longest_prefix_size; i++) {
-            if (p1.content_.data()[i] != p2.content_.data()[i])
-                break;
+            if (p1.content_.data()[i] != p2.content_.data()[i]
+                or not p1.isFlagActive(i) 
+                or not p2.isFlagActive(i) ) {
+
+                    break;
+            }
         }
 
         if (i == longest_prefix_size)
@@ -115,39 +131,70 @@ struct Prefix {
     }
 
     /**
-     * This method swap the bit a the position 'bit' and return the new prefix
+     * This method swap the bit a the position 'bit'
      *
      * @param bit Position of the bit to swap
-     *
      * @return The prefix with the bit at position 'bit' swapped
-     *
      * @throw out_of_range Throw out of range if bit does not exist
      */
-    void swapContentBit(size_t bit) const {
+    void swapContentBit(size_t bit) {
         swapBit(content_, bit);
     }
 
-    void swapFlagBit(size_t bit) const {
+    void swapFlagBit(size_t bit) {
         swapBit(flags_, bit);
+    }
+
+    Prefix addPaddingContent(size_t size) {
+        return Prefix(addPadding(content_, size));
+    }
+
+    void updateFlags() {
+        // Fill first known bit
+        auto csize = size_;
+        while(csize >= 8) {
+            flags_.push_back(0xFF);
+            csize -= 8;
+        }
+
+        // if needed fill remaining bit
+        if ( csize )
+            flags.push_back(0xFF << (8 - csize));
+
+        // Complet vector space missing
+        for ( auto i = flags_.size(); i < content_.size(); i++ )
+            flags_.push_back(0xFF);
     }
 
     size_t size_ {0};
 
+    Blob flags_ {};
     Blob content_ {};
 private:
-    std::stringstream blobToString(Blob &b) const {
+    std::stringstream blobToString(Blob &bl) const {
         std::stringstream ss;
 
         auto bn = size_ % 8;
-        auto n = size_ / 8;
+        auto n = size_ / 8
 
-        for (size_t i = 0; i<n; i++)
+        for (size_t i = 0; i < n; i++)
             ss << std::bitset<8>(b[i]);
         if (bn)
-            for (unsigned b=0; b<bn; b++)
-                ss << (char)((b[n] & (1 << (7 - b))) ? '1':'0');
+            for (unsigned b=0; b < bn; b++)
+                ss << (char)((bl[n] & (1 << (7 - b))) ? '1':'0');
 
         return ss;
+    }
+
+    Blob addPadding(Blob toP, size_t size) {
+        Blob copy = toP;
+
+        auto bit_loc = toP.size() * 8 + 1;
+        for ( auto i = copy.size(); i <= size; i++ )
+            copy.push_back(0);
+
+        swapBit(bit_loc);
+        return copy;
     }
 
     bool isActiveBit(Blob &b, size_t pos) const {
@@ -161,16 +208,9 @@ private:
         if ( bit >= size_ )
             throw std::out_of_range("bit larger than prefix size.");
 
-        Prefix copy = *this;
-
         size_t offset_bit = (8 - bit) % 8;
-        copy.content_[bit / 8] ^= (1 << offset_bit);
-
-        return copy;
+        b[bit / 8] ^= (1 << offset_bit);
     }
-
-    size_t size_ {0};
-    Blob content_ {};
 };
 
 using Value = std::pair<InfoHash, dht::Value::Id>;
@@ -213,11 +253,8 @@ public:
     }
 
     Pht(std::string name, KeySpec k_spec, std::shared_ptr<DhtRunner> dht)
-        : name_(INDEX_PREFIX + name), canary_(name_ + ".canary"), keySpec_(k_spec), dht_(dht)
-    {
-        if (k_spec.size() != 1)
-            throw std::invalid_argument("PHT only supports unidimensional data.");
-    }
+        : name_(INDEX_PREFIX + name), canary_(name_ + ".canary"), keySpec_(k_spec), dht_(dht) {}
+
     virtual ~Pht () { }
 
     /**
@@ -281,6 +318,8 @@ private:
             DoneCallbackSimple done_cb, std::shared_ptr<unsigned> max_common_prefix_len,
             int start = -1, bool all_values = false);
 
+
+
     /**
      * Linearizes the key into a unidimensional key. A pht only takes
      * unidimensional key.
@@ -291,16 +330,21 @@ private:
      */
     virtual Prefix linearize(Key k) const {
         if (not validKey(k)) { throw std::invalid_argument(INVALID_KEY); }
+        std::vector<Prefix> all_prefix;
+        auto max = std::max_element(keySpec_.begin(), keySpec_.end(), 
+            [](const std::pair<string, size_t>& a, const std::pair<string, size_t>& b) {
+                return a.second < b.second;
+            });
 
-        Prefix p = Blob {k.begin()->second.begin(), k.begin()->second.end()};
+        for ( auto i = 0; i < k.size; i++ ) {
+            Prefix p = Blob {k.begin()->second.begin(), k.begin()->second.end()};
+            p.addPaddingContent(max);
+            p.updateFlags();
 
-        auto bit_loc = p.size_ + 1;
-        for ( auto i = p.content_.size(); i <= keySpec_.begin()->second; i++ ) {
-            p.content_.push_back(0);
-            p.size_ += 8;
+            all_prefix.push_back(p);
         }
 
-        return p.swapBit(bit_loc);
+        return zcurve(all_prefix);
     };
 
     /**

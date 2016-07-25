@@ -28,21 +28,22 @@ namespace indexation {
  */
 struct Prefix {
     Prefix() {}
-    Prefix(InfoHash h) : size_(h.size() * 8), content_(h.begin(), h.end()) {}
-
-    Prefix(const Blob& d) : size_(d.size()*8), content_(d) { updateFlags(); }
-    Prefix(const Blob& d, const Blob& f) : size_(d.size()*8), content_(d), flags_(f) {}
+    Prefix(InfoHash h) : size_(h.size() * 8), content_(h.begin(), h.end()) { }
+    Prefix(const Blob& d, const Blob& f={}) : size_(d.size()*8), flags_(f), content_(d) { }
 
     Prefix(const Prefix& p, size_t first) :
         size_(std::min(first, p.content_.size()*8)),
-        content_(Blob(p.content_.begin(), p.content_.begin()+size_/8)),
-        flags_(Blob(p.flags_.begin(), p.flags_.begin()+size_/8))
+        content_(Blob(p.content_.begin(), p.content_.begin()+size_/8))
     {
         auto rem = size_ % 8;
-        if (rem) {
-            content_.push_back(p.content_[size_/8] & (0xFF << (8 - rem)));
-            flags_.push_back(p.flags_[size_/8] & (0xFF << (8 - rem)));
+        if ( not flags_.empty() ) {
+            flags_ = Blob(p.flags_.begin(), p.flags_.begin()+size_/8);
+            if (rem)
+                flags_.push_back(p.flags_[size_/8] & (0xFF << (8 - rem))); 
         }
+
+        if (rem)
+            content_.push_back(p.content_[size_/8] & (0xFF << (8 - rem)));
     }
 
     Prefix getPrefix(ssize_t len) const {
@@ -61,7 +62,7 @@ struct Prefix {
      * @throw out_of_range Throw out of range if the bit at 'pos' does not exist
      */
     bool isFlagActive(size_t pos) const {
-        return isActiveBit(flags_, pos);
+        return flags_.empty() or isActiveBit(flags_, pos);
     }
 
     bool isContentBitActive(size_t pos) const {
@@ -91,11 +92,11 @@ struct Prefix {
     std::string toString() const {
         std::stringstream ss;
 
-        ss << "Content_ : ";
+        ss << "Prefix : " << std::endl << "\tContent_ : ";
         ss << blobToString(content_);
         ss << std::endl;
 
-        ss << "Flags_ : ";
+        ss << "\tFlags_ :   ";
         ss << blobToString(flags_);
         ss << std::endl;
 
@@ -145,13 +146,13 @@ struct Prefix {
         swapBit(flags_, bit);
     }
 
-    Prefix addPaddingContent(size_t size) {
-        return Prefix(addPadding(content_, size));
+    void addPaddingContent(size_t size) {
+        content_ = addPadding(content_, size);
     }
 
     void updateFlags() {
         // Fill first known bit
-        auto csize = size_;
+        auto csize = size_ - flags_.size() * 8;
         while(csize >= 8) {
             flags_.push_back(0xFF);
             csize -= 8;
@@ -177,8 +178,8 @@ private:
         auto bn = size_ % 8;
         auto n = size_ / 8;
 
-        for (size_t i = 0; i < n; i++)
-            ss << std::bitset<8>(bl[i]);
+        for (size_t i = 0; i < bl.size(); i++)
+            ss << std::bitset<8>(bl[i]) << " ";
         if (bn)
             for (unsigned b=0; b < bn; b++)
                 ss << (char)((bl[n] & (1 << (7 - b))) ? '1':'0');
@@ -188,12 +189,10 @@ private:
 
     Blob addPadding(Blob toP, size_t size) {
         Blob copy = toP;
-
-        auto bit_loc = toP.size() * 8 + 1;
-        for ( auto i = copy.size(); i <= size; i++ )
+        for ( auto i = copy.size(); i < size; i++ )
             copy.push_back(0);
 
-        swapBit(toP, bit_loc);
+        swapBit(copy, size_ + 1);
         return copy;
     }
 
@@ -205,7 +204,7 @@ private:
     }
 
     void swapBit(Blob &b, size_t bit) {
-        if ( bit >= size_ )
+        if ( bit >= b.size() * 8 )
             throw std::out_of_range("bit larger than prefix size.");
 
         size_t offset_bit = (8 - bit) % 8;
@@ -362,21 +361,25 @@ private:
         if ( all_prefix.size() == 1 ) return all_prefix[0];
 
         for ( size_t j = 0, bit = 0; j < all_prefix[0].content_.size(); j++) {
-
             uint8_t mask = 0x80;
             for ( int i = 0; i < 8; ) {
-                uint8_t o = 0;
+                uint8_t content = 0;
+                uint8_t flags = 0;
                 for ( int k = 0 ; k < 8; k++, bit++ ) {
-                     auto diff = k - i;
-                     auto x = all_prefix[bit].content_[j] & mask;
-                     o |= ( diff >= 0 ) ? x >> diff : x << std::abs(diff);
-                     if ( bit == all_prefix.size() ) { bit = -1; ++i; mask >>= 1; }
+                    auto diff = k - i;
+                    auto x = all_prefix[bit].content_[j] & mask;
+                    auto y = all_prefix[bit].flags_[j] & mask;
+                    content |= ( diff >= 0 ) ? x >> diff : x << std::abs(diff);
+                    flags   |= ( diff >= 0 ) ? y >> diff : y << std::abs(diff);
+
+                    if ( bit == all_prefix.size() - 1 ) { bit = -1; ++i; mask >>= 1; }
                 }
-                p.content_.push_back(o);
+                p.content_.push_back(content);
+                p.flags_.push_back(flags);
+                p.size_ += 8;
             }
         }
-
-        std::cerr << " TO STRING : " << p.toString() << std::endl;
+        std::cerr << p.toString() << std::endl;
         return p;   
     }
 
@@ -391,24 +394,20 @@ private:
     virtual Prefix linearize(Key k) const {
         if (not validKey(k)) { throw std::invalid_argument(INVALID_KEY); }
 
-        
-
         std::vector<Prefix> all_prefix;
         auto max = std::max_element(keySpec_.begin(), keySpec_.end(), 
             [&](const std::pair<std::string, size_t>& a, const std::pair<std::string, size_t>& b) {
                 return a.second < b.second;
-            })->second;
-        std::cerr << "ICI max " << max  << std::endl;
-        for ( auto i = 0; i < k.size(); i++ ) {
+            })->second + 1;
+
+        for ( size_t i = 0; i < k.size(); i++ ) {
             Prefix p = Blob {k.begin()->second.begin(), k.begin()->second.end()};
             p.addPaddingContent(max);
             p.updateFlags();
+            all_prefix.push_back(p);
 
             std::cerr << p.toString() << std::endl;
-            all_prefix.push_back(p);
         }
-
-
 
         return zcurve(all_prefix);
     };

@@ -241,7 +241,6 @@ class Pht {
 
 public:
 
-
     /* This is the maximum number of entries per node. This parameter is
      * critical and influences the traffic a lot during a lookup operation.
      */

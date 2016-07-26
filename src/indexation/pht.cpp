@@ -98,8 +98,6 @@ void Pht::lookupStep(Prefix p, std::shared_ptr<int> lo, std::shared_ptr<int> hi,
         bool is_pht {false};
     };
 
-    std::cerr << "Into lookupStep" << std::endl;
-
     /* start could be under 0 but after the compare it to 0 it always will be unsigned, so we can cast it*/
     auto mid = (start >= 0) ? (unsigned) start : (*lo + *hi)/2;
     auto first_res = std::make_shared<node_lookup_result>();
@@ -262,7 +260,6 @@ void Pht::insert(Prefix kp, IndexEntry entry, std::shared_ptr<int> lo, std::shar
                  DoneCallbackSimple done_cb) {
 
     // if (time_p + ValueType::USER_DATA.expiration < clock::now()) return;
-    std::cerr << "Into Insert" << std::endl;
     auto vals = std::make_shared<std::vector<std::shared_ptr<IndexEntry>>>();
     auto final_prefix = std::make_shared<Prefix>();
 
@@ -278,7 +275,6 @@ void Pht::insert(Prefix kp, IndexEntry entry, std::shared_ptr<int> lo, std::shar
 
                 RealInsertCallback real_insert = [=]( std::shared_ptr<Prefix> p, IndexEntry entry) {
                     updateCanary(*p);
-                    std::cerr << "CHECK UPDATE" << std::endl;
                     checkPhtUpdate(*p, entry, time_p);
                     cache_.insert(*p);
                     dht_->put(p->hash(), std::move(entry), done_cb /*, time_p */);

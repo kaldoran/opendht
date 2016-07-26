@@ -400,8 +400,8 @@ private:
                 return a.second < b.second;
             })->second + 1;
 
-        for ( size_t i = 0; i < k.size(); i++ ) {
-            Prefix p = Blob {k.begin()->second.begin(), k.begin()->second.end()};
+        for ( auto const& it : k ) {
+            Prefix p = Blob {it.second.begin(), it.second.end()};
             p.addPaddingContent(max);
             p.updateFlags();
             all_prefix.push_back(p);

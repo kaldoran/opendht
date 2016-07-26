@@ -170,45 +170,47 @@ void Pht::lookupStep(Prefix p, std::shared_ptr<int> lo, std::shared_ptr<int> hi,
             return true;
         };
 
-        dht_->get(p.getPrefix(mid).hash(),
-                std::bind(on_get, std::placeholders::_1, first_res),
-                [=](bool ok) {
-                    if (not ok) {
-                        // DHT failed
-                        first_res->done = true;
-                        if (done_cb and second_res->done)
-                            on_done(false);
-                    }
-                    else {
-                        if (not first_res->is_pht) {
-                            // Not a PHT node.
-                            *hi = mid-1;
-                            lookupStep(p, lo, hi, vals, cb, done_cb, max_common_prefix_len, -1, all_values);
-                        } else {
-                            first_res->done = true;
-                            if (second_res->done or mid >= p.size_ )
-                                on_done(true);
-                        }
-                    }
-                }, pht_filter);
-
-        if (mid < p.size_)
-           dht_->get(p.getPrefix(mid+1).hash(),
-                    std::bind(on_get, std::placeholders::_1, second_res),
+        if ( p.isFlagActive(mid) ) { 
+            dht_->get(p.getPrefix(mid).hash(),
+                    std::bind(on_get, std::placeholders::_1, first_res),
                     [=](bool ok) {
                         if (not ok) {
                             // DHT failed
-                            second_res->done = true;
-                            if (done_cb and first_res->done)
+                            first_res->done = true;
+                            if (done_cb and second_res->done)
                                 on_done(false);
                         }
                         else {
-                            second_res->done = true;
-                            if (first_res->done)
-                                on_done(true);
+                            if (not first_res->is_pht) {
+                                // Not a PHT node.
+                                *hi = mid-1;
+                                lookupStep(p, lo, hi, vals, cb, done_cb, max_common_prefix_len, -1, all_values);
+                            } else {
+                                first_res->done = true;
+                                if (second_res->done or mid >= p.size_ )
+                                    on_done(true);
+                            }
                         }
                     }, pht_filter);
+        }
 
+        if (mid < p.size_)
+            if ( p.isFlagActive(mid + 1) )
+                dht_->get(p.getPrefix(mid+1).hash(),
+                        std::bind(on_get, std::placeholders::_1, second_res),
+                        [=](bool ok) {
+                            if (not ok) {
+                                // DHT failed
+                                second_res->done = true;
+                                if (done_cb and first_res->done)
+                                    on_done(false);
+                            }
+                            else {
+                                second_res->done = true;
+                                if (first_res->done)
+                                    on_done(true);
+                            }
+                        }, pht_filter);
     } else {
         on_done(true);
     }

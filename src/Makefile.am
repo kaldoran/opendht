@@ -3,7 +3,8 @@ SUBDIRS = argon2
 lib_LTLIBRARIES = libopendht.la
 
 AM_CPPFLAGS = -I../include/opendht
-libopendht_la_LDFLAGS = @LDFLAGS@ @GnuTLS_LIBS@ @Nettle_LIBS@ -version-number @OPENDHT_MAJOR_VERSION@:@OPENDHT_MINOR_VERSION@:@OPENDHT_PATCH_VERSION@
+libopendht_la_CXXFLAGS = @CXXFLAGS@
+libopendht_la_LDFLAGS = @LDFLAGS@ @GNUTLS_LIBS@ @nettle_LIBS@
 libopendht_la_LIBADD = ./argon2/libargon2.la
 
 libopendht_la_SOURCES = \
@@ -19,7 +20,8 @@ libopendht_la_SOURCES = \
         crypto.cpp \
         securedht.cpp \
         dhtrunner.cpp \
-        default_types.cpp
+        default_types.cpp \
+        indexation/pht.cpp
 
 if WIN32
 libopendht_la_SOURCES += rng.cpp
@@ -42,4 +44,5 @@ nobase_include_HEADERS = \
         ../include/opendht/dhtrunner.h \
         ../include/opendht/default_types.h \
         ../include/opendht/log.h \
-        ../include/opendht/rng.h
+        ../include/opendht/rng.h \
+        ../include/opendht/indexation/pht.h

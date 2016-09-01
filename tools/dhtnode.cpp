@@ -38,10 +38,12 @@ void print_id_req() {
     std::cout << "An identity is required to perform this operation (run with -i)" << std::endl;
 }
 
-void print_node_info(const DhtRunner& dht, const dht_params& params) {
-    std::cout << "OpenDht node " << dht.getNodeId() << " running on port " <<  dht.getBoundPort() << std::endl;
+void print_node_info(const std::shared_ptr<DhtRunner>& dht, const dht_params& params) {
+    std::cout << "OpenDht node " << dht->getNodeId() << " running on port " <<  dht->getBoundPort() << std::endl;
+    if (params.is_bootstrap_node)
+        std::cout << "Running in bootstrap mode (discouraged)." << std::endl;
     if (params.generate_identity)
-        std::cout << "Public key ID " << dht.getId() << std::endl;
+        std::cout << "Public key ID " << dht->getId() << std::endl;
 }
 
 void print_help() {
@@ -58,17 +60,20 @@ void print_help() {
               << "  lr         Print the full current routing table of this node" << std::endl;
 
     std::cout << std::endl << "Operations on the DHT:" << std::endl
-              << "  b ip:port             Ping potential node at given IP address/port." << std::endl
-              << "  g [key] [where]       Get values at [key]. [where] is the 'where' part of an SQL-ish string." << std::endl
-              << "  q [key] [query]       Query field values at [key]. [query] is an SQL-ish string." << std::endl
-              << "  l [key] [where]       Listen for value changes at [key]. [where] is the 'where' part of an SQL-ish string." << std::endl
-              << "  p [key] [str]         Put string value at [key]." << std::endl
-              << "  s [key] [str]         Put string value at [key], signed with our generated private key." << std::endl
-              << "  e [key] [dest] [str]  Put string value at [key], encrypted for [dest] with its public key (if found)." << std::endl
+              << "  b <ip:port>             Ping potential node at given IP address/port." << std::endl
+              << "  g <key>               Get values at <key>." << std::endl
+              << "  l <key>               Listen for value changes at <key>." << std::endl
+              << "  p <key> <str>         Put string value at <key>." << std::endl
+              << "  s <key> <str>         Put string value at <key>, signed with our generated private key." << std::endl
+              << "  e <key> <dest> <str>  Put string value at <key>, encrypted for <dest> with its public key (if found)." << std::endl;
+    std::cout << std::endl << "Indexation operations on the DHT:" << std::endl
+              << "  il <name> <key> [exact match]   Lookup the index named <name> with the key <key>." << std::endl
+              << "                                  Set [exact match] to 'false' for inexact match lookup." << std::endl
+              << "  ii <name> <key> <value>         Inserts the value <value> under the key <key> in the index named <name>." << std::endl
               << std::endl;
 }
 
-void cmd_loop(DhtRunner& dht, dht_params& params)
+void cmd_loop(std::shared_ptr<DhtRunner>& dht, std::map<std::string, indexation::Pht> indexes, dht_params& params)
 {
     print_node_info(dht, params);
     std::cout << " (type 'h' or 'help' for a list of possible commands)" << std::endl << std::endl;
@@ -84,8 +89,8 @@ void cmd_loop(DhtRunner& dht, dht_params& params)
             break;
 
         std::istringstream iss(line);
-        std::string op, idstr, value;
-        iss >> op >> idstr;
+        std::string op, idstr, value, index, keystr;
+        iss >> op;
 
         if (op == "x" || op == "exit" || op == "quit") {
             break;
@@ -96,31 +101,32 @@ void cmd_loop(DhtRunner& dht, dht_params& params)
             print_node_info(dht, params);
             unsigned good4, dubious4, cached4, incoming4;
             unsigned good6, dubious6, cached6, incoming6;
-            dht.getNodesStats(AF_INET, &good4, &dubious4, &cached4, &incoming4);
-            dht.getNodesStats(AF_INET6, &good6, &dubious6, &cached6, &incoming6);
+            dht->getNodesStats(AF_INET, &good4, &dubious4, &cached4, &incoming4);
+            dht->getNodesStats(AF_INET6, &good6, &dubious6, &cached6, &incoming6);
             std::cout << "IPv4 nodes : " << good4 << " good, " << dubious4 << " dubious, " << incoming4 << " incoming." << std::endl;
             std::cout << "IPv6 nodes : " << good6 << " good, " << dubious6 << " dubious, " << incoming6 << " incoming." << std::endl;
             continue;
         } else if (op == "lr") {
             std::cout << "IPv4 routing table:" << std::endl;
-            std::cout << dht.getRoutingTablesLog(AF_INET) << std::endl;
+            std::cout << dht->getRoutingTablesLog(AF_INET) << std::endl;
             std::cout << "IPv6 routing table:" << std::endl;
-            std::cout << dht.getRoutingTablesLog(AF_INET6) << std::endl;
+            std::cout << dht->getRoutingTablesLog(AF_INET6) << std::endl;
             continue;
         } else if (op == "ld") {
-            std::cout << dht.getStorageLog() << std::endl;
+            std::cout << dht->getStorageLog() << std::endl;
             continue;
         } else if (op == "ls") {
             std::cout << "Searches:" << std::endl;
-            std::cout << dht.getSearchesLog() << std::endl;
+            std::cout << dht->getSearchesLog() << std::endl;
             continue;
         } else if (op == "la")  {
             std::cout << "Reported public addresses:" << std::endl;
-            auto addrs = dht.getPublicAddressStr();
+            auto addrs = dht->getPublicAddressStr();
             for (const auto& addr : addrs)
                 std::cout << addr << std::endl;
             continue;
         } else if (op == "b") {
+            iss >> idstr;
             try {
                 auto addr = splitPort(idstr);
                 if (not addr.first.empty() and addr.second.empty()){
@@ -128,7 +134,7 @@ void cmd_loop(DhtRunner& dht, dht_params& params)
                     ss << DHT_DEFAULT_PORT;
                     addr.second = ss.str();
                 }
-                dht.bootstrap(addr.first.c_str(), addr.second.c_str());
+                dht->bootstrap(addr.first.c_str(), addr.second.c_str());
             } catch (const std::exception& e) {
                 std::cerr << e.what() << std::endl;
             }
@@ -136,33 +142,57 @@ void cmd_loop(DhtRunner& dht, dht_params& params)
         } else if (op == "log") {
             params.log = !params.log;
             if (params.log)
-                log::enableLogging(dht);
+                log::enableLogging(*dht);
             else
-                log::disableLogging(dht);
+                log::disableLogging(*dht);
             continue;
         }
 
         if (op.empty())
             continue;
 
-        dht::InfoHash id {idstr};
-        static const std::set<std::string> VALID_OPS {"g", "q", "l", "p", "s", "e", "a"};
+        static const std::set<std::string> VALID_OPS {"g", "l", "il", "ii", "p", "s", "e", "a"};
         if (VALID_OPS.find(op) == VALID_OPS.cend()) {
             std::cout << "Unknown command: " << op << std::endl;
             std::cout << " (type 'h' or 'help' for a list of possible commands)" << std::endl;
             continue;
         }
-        static constexpr dht::InfoHash INVALID_ID {};
-        if (id == INVALID_ID) {
-            std::cout << "Syntax error: invalid InfoHash." << std::endl;
-            continue;
+
+        if (op == "il" or op == "ii") {
+            // Pht syntax
+            iss >> index >> keystr;
+            auto new_index = std::find_if(indexes.begin(), indexes.end(),
+                    [&](std::pair<const std::string, indexation::Pht>& i) {
+                        return i.first == index;
+                    }) == indexes.end();
+            if (not index.size()) {
+                std::cout << "You must enter the index name." << std::endl;
+                continue;
+            } else if (new_index) {
+                using namespace dht::indexation;
+                try {
+                    auto key = createPhtKey(parseStringMap(keystr));
+                    Pht::KeySpec ks;
+                    std::transform(key.begin(), key.end(), std::inserter(ks, ks.end()), [](Pht::Key::value_type& f) {
+                        return std::make_pair(f.first, f.second.size());
+                    });
+                    indexes.emplace(index, Pht {index, std::move(ks), dht});
+                } catch (std::invalid_argument& e) { std::cout << e.what() << std::endl; }
+            }
+        }
+        else {
+            // Dht syntax
+            iss >> idstr;
+            InfoHash h {idstr};
+            if (not isInfoHash(h))
+                continue;
         }
 
+        dht::InfoHash id {idstr};
+        // Dht
         auto start = std::chrono::high_resolution_clock::now();
         if (op == "g") {
-            std::string rem;
-            std::getline(iss, rem);
-            dht.get(id, [start](std::shared_ptr<Value> value) {
+            dht->get(id, [start](std::shared_ptr<Value> value) {
                 auto now = std::chrono::high_resolution_clock::now();
                 std::cout << "Get: found value (after " << print_dt(now-start) << "s)" << std::endl;
                 std::cout << "\t" << *value << std::endl;
@@ -188,9 +218,7 @@ void cmd_loop(DhtRunner& dht, dht_params& params)
             }, dht::Query {std::move(rem)});
         }
         else if (op == "l") {
-            std::string rem;
-            std::getline(iss, rem);
-            dht.listen(id, [](std::shared_ptr<Value> value) {
+            dht->listen(id, [](std::shared_ptr<Value> value) {
                 std::cout << "Listen: found value:" << std::endl;
                 std::cout << "\t" << *value << std::endl;
                 return true;
@@ -199,7 +227,7 @@ void cmd_loop(DhtRunner& dht, dht_params& params)
         else if (op == "p") {
             std::string v;
             iss >> v;
-            dht.put(id, dht::Value {
+            dht->put(id, dht::Value {
                 dht::ValueType::USER_DATA.id,
                 std::vector<uint8_t> {v.begin(), v.end()}
             }, [start](bool ok) {
@@ -214,7 +242,7 @@ void cmd_loop(DhtRunner& dht, dht_params& params)
             }
             std::string v;
             iss >> v;
-            dht.putSigned(id, dht::Value {
+            dht->putSigned(id, dht::Value {
                 dht::ValueType::USER_DATA.id,
                 std::vector<uint8_t> {v.begin(), v.end()}
             }, [start](bool ok) {
@@ -230,7 +258,7 @@ void cmd_loop(DhtRunner& dht, dht_params& params)
             std::string tostr;
             std::string v;
             iss >> tostr >> v;
-            dht.putEncrypted(id, InfoHash(tostr), dht::Value {
+            dht->putEncrypted(id, InfoHash(tostr), dht::Value {
                 dht::ValueType::USER_DATA.id,
                 std::vector<uint8_t> {v.begin(), v.end()}
             }, [start](bool ok) {
@@ -241,10 +269,55 @@ void cmd_loop(DhtRunner& dht, dht_params& params)
         else if (op == "a") {
             in_port_t port;
             iss >> port;
-            dht.put(id, dht::Value {dht::IpServiceAnnouncement::TYPE.id, dht::IpServiceAnnouncement(port)}, [start](bool ok) {
+            dht->put(id, dht::Value {dht::IpServiceAnnouncement::TYPE.id, dht::IpServiceAnnouncement(port)}, [start](bool ok) {
                 auto end = std::chrono::high_resolution_clock::now();
                 std::cout << "Announce: " << (ok ? "success" : "failure") << " (took " << print_dt(end-start) << "s)" << std::endl;
             });
+        }
+        else if (op == "il") {
+            std::string exact_match;
+            iss >> exact_match;
+            try {
+                auto key = createPhtKey(parseStringMap(keystr));
+                indexes.at(index).lookup(key,
+                    [=](std::vector<std::shared_ptr<indexation::Value>>& vals, indexation::Prefix p) {
+                        if (vals.empty())
+                            return;
+                        std::cout << "Pht::lookup: found entries!" << std::endl
+                                  << p.toString() << std::endl
+                                  << "   hash: " << p.hash() << std::endl;
+                        std::cout << "   entries:" << std::endl;
+                        for (auto v : vals)
+                             std::cout << "      " << v->first.toString() << "[vid: " << v->second << "]" << std::endl;
+                    },
+                    [start](bool ok) {
+                        auto end = std::chrono::high_resolution_clock::now();
+                        std::cout << "Pht::lookup: " << (ok ? "done." : "failed.")
+                                  << " took " << print_dt(end-start) << "s)" << std::endl;
+
+                    }, exact_match.size() != 0 and exact_match == "false" ? false : true
+                );
+            }
+            catch (std::invalid_argument& e) { std::cout << e.what() << std::endl; }
+            catch (std::out_of_range& e) { }
+        }
+        else if (op == "ii") {
+            iss >> idstr;
+            InfoHash h {idstr};
+            if (not isInfoHash(h))
+                continue;
+
+            indexation::Value v {h, 0};
+            try {
+                auto key = createPhtKey(parseStringMap(keystr));
+                indexes.at(index).insert(key, v,
+                    [=](bool ok) {
+                        std::cout << "Pht::insert: " << (ok ? "done." : "failed.") << std::endl;
+                    }
+                );
+            }
+            catch (std::invalid_argument& e) { std::cout << e.what() << std::endl; }
+            catch (std::out_of_range& e) { }
         }
     }
 
@@ -257,7 +330,9 @@ main(int argc, char **argv)
     if (int rc = gnutls_global_init())  // TODO: remove with GnuTLS >= 3.3
         throw std::runtime_error(std::string("Error initializing GnuTLS: ")+gnutls_strerror(rc));
 
-    DhtRunner dht;
+    auto dht = std::make_shared<DhtRunner>();
+    std::map<std::string, indexation::Pht> indexes;
+
     try {
         auto params = parseArgs(argc, argv);
         if (params.help) {
@@ -278,21 +353,21 @@ main(int argc, char **argv)
 
         if (params.log) {
             if (not params.logfile.empty())
-                log::enableFileLogging(dht, params.logfile);
+                log::enableFileLogging(*dht, params.logfile);
             else
-                log::enableLogging(dht);
+                log::enableLogging(*dht);
         }
 
         if (not params.bootstrap.first.empty()) {
             //std::cout << "Bootstrap: " << params.bootstrap.first << ":" << params.bootstrap.second << std::endl;
-            dht.bootstrap(params.bootstrap.first.c_str(), params.bootstrap.second.c_str());
+            dht->bootstrap(params.bootstrap.first.c_str(), params.bootstrap.second.c_str());
         }
 
         if (params.daemonize) {
             while (true)
                 std::this_thread::sleep_for(std::chrono::seconds(30));
         } else {
-            cmd_loop(dht, params);
+            cmd_loop(dht, indexes, params);
         }
 
     } catch(const std::exception&e) {
@@ -303,7 +378,7 @@ main(int argc, char **argv)
     std::mutex m;
     std::atomic_bool done {false};
 
-    dht.shutdown([&]()
+    dht->shutdown([&]()
     {
         std::lock_guard<std::mutex> lk(m);
         done = true;
@@ -314,7 +389,7 @@ main(int argc, char **argv)
     std::unique_lock<std::mutex> lk(m);
     cv.wait(lk, [&](){ return done.load(); });
 
-    dht.join();
+    dht->join();
     gnutls_global_deinit();
 
     return 0;
